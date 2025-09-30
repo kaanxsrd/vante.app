@@ -9,6 +9,12 @@ export const siteConfig = {
   url: 'https://vante.app',
   description: 'About myself and my projects.',
 
+  landing: {
+    intro:
+      "Hi, I'm Kaan a freelance developer from Denmark, studying at Technical Education Copenhagen. I work on various projects, from simple websites to complex backend apps, and I enjoy the variety of challenges each project offers.",
+    about: "When I'm not coding, I'm probably playing fps games or talking with my friends.",
+  },
+
   navbar: [
     { href: '/', icon: HomeIcon, label: 'Home' },
     { href: '/blog', icon: NotebookIcon, label: 'Blog' },

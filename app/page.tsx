@@ -1,4 +1,5 @@
 import React from 'react';
+import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 import BlurFade from '@/components/magicui/blur-fade';
@@ -87,13 +88,10 @@ export default async function HomePage() {
               <h2 className="title font-medium text-lg mb-4">Today</h2>
               <div className="flex flex-col space-y-4">
                 <p className="prose dark:prose-invert text-pretty inline dark:text-primary/50 text-primary/80">
-                  Hi, I&apos;m Kaan a freelance developer from Denmark, studying at Technical
-                  Education Copenhagen. I work on various projects, from simple websites to complex
-                  backend apps, and I enjoy the variety of challenges each project offers.
+                  {siteConfig.landing.intro}
                 </p>
                 <p className="prose dark:prose-invert text-pretty inline dark:text-primary/50 text-primary/80">
-                  When I&apos;m not coding, I&apos;m probably playing fps games or talking with my
-                  friends.
+                  {siteConfig.landing.about}
                 </p>
               </div>
             </div>
@@ -138,20 +136,7 @@ export default async function HomePage() {
                       view more blogs
                     </div>
                   </Link>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="lucide lucide-chevron-right size-5 text-primary/40"
-                  >
-                    <path d="m9 18 6-6-6-6"></path>
-                  </svg>
+                  <ChevronRight className="size-5 text-primary/40" />
                 </div>
               </div>
               <div className="space-y-2">
@@ -189,20 +174,7 @@ export default async function HomePage() {
                       view all projects
                     </div>
                   </Link>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="lucide lucide-chevron-right size-5 text-primary/40"
-                  >
-                    <path d="m9 18 6-6-6-6"></path>
-                  </svg>
+                  <ChevronRight className="size-5 text-primary/40" />
                 </div>
               </div>
               <div className="space-y-8">

@@ -88,7 +88,9 @@ export default async function BlogPage() {
 
           <div className="space-y-4">
             {sortedBlogs.length === 0 && (
-              <p className="text-muted-foreground">No posts published yet.</p>
+              <p className="prose dark:prose-invert text-sm text-neutral-600 dark:text-neutral-400">
+                No blogs published yet.
+              </p>
             )}
 
             {sortedBlogs.map((blog) => {
