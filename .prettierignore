@@ -1,0 +1,10 @@
+node_modules
+.next
+dist
+build
+coverage
+public/fonts
+public/authors
+pnpm-lock.yaml
+package-lock.json
+.DS_Store
