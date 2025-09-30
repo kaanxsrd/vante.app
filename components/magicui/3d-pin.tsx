@@ -3,16 +3,10 @@ import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
 
 export const PinContainer = ({
-  children,
   title,
-  href,
-  className,
   containerClassName,
 }: {
-  children?: React.ReactNode;
   title?: string;
-  href?: string;
-  className?: string;
   containerClassName?: string;
 }) => {
   return (
@@ -21,12 +15,12 @@ export const PinContainer = ({
       drag
       dragMomentum={false}
     >
-      <PinPerspective title={title} href={href} />
+      <PinPerspective title={title} />
     </motion.a>
   );
 };
 
-export const PinPerspective = ({ title, href }: { title?: string; href?: string }) => {
+export const PinPerspective = ({ title }: { title?: string }) => {
   return (
     <motion.div className="pointer-events-none  w-72 h-60 flex items-center justify-center opacity-100 z-[60] transition duration-500">
       <div className=" w-full h-full -mt-7 flex-none  inset-0">

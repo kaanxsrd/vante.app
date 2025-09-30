@@ -1,10 +1,7 @@
 'use client';
 
-import { Metadata } from 'next';
 import Image from 'next/image';
-import Link from 'next/link';
 import { PinContainer } from '@/components/magicui/3d-pin';
-import { ArrowLeft } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 export default function ContactPage() {
@@ -32,8 +29,8 @@ export default function ContactPage() {
       if (!res.ok) throw new Error(data.error || 'Failed to send message.');
       setSuccess(true);
       formRef.current?.reset();
-    } catch (err: any) {
-      setError(err.message || 'Failed to send message.');
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to send message.');
     } finally {
       setLoading(false);
     }
@@ -48,7 +45,7 @@ export default function ContactPage() {
           </h2>
           <p className="mt-8 max-w-lg text-center text-base text-neutral-600 md:text-left dark:text-neutral-400">
             Feel free to contact me for anything—questions, feedback, collaboration, or just to say
-            hello. I'm always open to connecting and happy to help!
+            hello. I&apos;m always open to connecting and happy to help!
           </p>
           <div className="relative mt-20 flex w-[600px] flex-shrink-0 -translate-x-10 items-center justify-center [perspective:800px] [transform-style:preserve-3d] sm:-translate-x-0 lg:-translate-x-32">
             <div
@@ -65,12 +62,11 @@ export default function ContactPage() {
                 containerClassName="!bg-transparent !border-none !ring-0"
               />
             </div>
-            <img
+            <Image
               alt="world map"
               loading="lazy"
               width="500"
               height="500"
-              decoding="async"
               className="[transform:rotateX(45deg)_translateZ(0px)] dark:invert dark:filter"
               src="/world.svg"
               style={{ color: 'transparent' }}

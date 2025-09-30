@@ -3,7 +3,7 @@ import { docs, meta } from '@/.source';
 import { loader } from 'fumadocs-core/source';
 import { createMDXSource } from 'fumadocs-mdx';
 import Link from 'next/link';
-import { ArrowUp, ArrowUpLeft } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
 
 const blogSource = loader({
   baseUrl: '/blog',

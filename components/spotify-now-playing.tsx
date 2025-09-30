@@ -52,7 +52,7 @@ export function SpotifyNowPlaying({
       const json = (await response.json()) as SpotifyData;
       setData(json);
       setTick(0);
-    } catch (error) {}
+    } catch {}
   }, []);
 
   useEffect(() => {

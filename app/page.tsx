@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import Image from 'next/image';
 import BlurFade from '@/components/magicui/blur-fade';
 import { SpotifyNowPlaying } from '@/components/spotify-now-playing';
@@ -86,12 +87,13 @@ export default async function HomePage() {
               <h2 className="title font-medium text-lg mb-4">Today</h2>
               <div className="flex flex-col space-y-4">
                 <p className="prose dark:prose-invert text-pretty inline dark:text-primary/50 text-primary/80">
-                  Hi, I'm Kaan a freelance developer from Denmark, studying at Technical Education
-                  Copenhagen. I work on various projects, from simple websites to complex backend
-                  apps, and I enjoy the variety of challenges each project offers.
+                  Hi, I&apos;m Kaan a freelance developer from Denmark, studying at Technical
+                  Education Copenhagen. I work on various projects, from simple websites to complex
+                  backend apps, and I enjoy the variety of challenges each project offers.
                 </p>
                 <p className="prose dark:prose-invert text-pretty inline dark:text-primary/50 text-primary/80">
-                  When I'm not coding, I'm probably playing fps games or talking with my friends.
+                  When I&apos;m not coding, I&apos;m probably playing fps games or talking with my
+                  friends.
                 </p>
               </div>
             </div>
@@ -131,11 +133,11 @@ export default async function HomePage() {
               <div className="flex justify-between mb-4">
                 <h2 className="title font-medium text-lg">Latest Blogs</h2>
                 <div className="flex items-center">
-                  <a className="link inline-flex gap-1 w-fit" href="/blog">
+                  <Link className="link inline-flex gap-1 w-fit" href="/blog">
                     <div className="prose dark:prose-invert underline underline-offset-4 decoration-1 decoration-secondary-foreground/40 hover:decoration-secondary-foreground/70 transition-all">
                       view more blogs
                     </div>
-                  </a>
+                  </Link>
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     width="24"
@@ -165,7 +167,6 @@ export default async function HomePage() {
                       title={blog.data.title}
                       description={blog.data.description}
                       date={formatDate(blog.data.date)}
-                      thumbnail={blog.data.thumbnail}
                       showRightBorder={false}
                       className="last:mb-0"
                       linkClassName="transform transition-transform duration-300 hover:scale-[1.02]"
@@ -183,11 +184,11 @@ export default async function HomePage() {
               <div className="flex justify-between mb-4">
                 <h2 className="title font-medium text-lg">Projects</h2>
                 <div className="flex items-center">
-                  <a className="link inline-flex gap-1 w-fit" href="/projects">
+                  <Link className="link inline-flex gap-1 w-fit" href="/projects">
                     <div className="prose dark:prose-invert underline underline-offset-4 decoration-1 decoration-secondary-foreground/40 hover:decoration-secondary-foreground/70 transition-all">
                       view all projects
                     </div>
-                  </a>
+                  </Link>
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     width="24"

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, ArrowUp, ArrowUpLeft, ChevronLeft } from 'lucide-react';
+import { ArrowUp, ChevronLeft } from 'lucide-react';
 import { docs, meta } from '@/.source';
 import { loader } from 'fumadocs-core/source';
 import { createMDXSource } from 'fumadocs-mdx';

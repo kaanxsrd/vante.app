@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { ArrowUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -8,7 +7,6 @@ interface BlogCardProps {
   title: string;
   description: string;
   date: string;
-  thumbnail?: string;
   showRightBorder?: boolean;
   className?: string;
   linkClassName?: string;
@@ -19,7 +17,6 @@ export function BlogCard({
   title,
   description,
   date,
-  thumbnail,
   showRightBorder = true,
   className,
   linkClassName,

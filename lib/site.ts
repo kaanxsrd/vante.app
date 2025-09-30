@@ -1,5 +1,5 @@
 import { Icons } from '@/components/icons';
-import { HomeIcon, Instagram, NotebookIcon, Pickaxe } from 'lucide-react';
+import { HomeIcon, NotebookIcon, Pickaxe } from 'lucide-react';
 
 export const siteConfig = {
   name: "Kaan 'Vante' Karahanlı",

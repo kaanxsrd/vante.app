@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 
 interface MediaViewerProps {
@@ -37,7 +38,14 @@ export function MediaViewer({
         </video>
       );
     }
-    return <img {...mediaProps} />;
+    return (
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        className={cn('object-cover rounded-lg border overflow-hidden', className)}
+      />
+    );
   };
 
   return (
