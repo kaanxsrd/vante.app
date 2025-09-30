@@ -165,6 +165,7 @@ export default function ContactPage() {
           </form>
         </div>
       </div>
+      <div className="h-7 md:hidden w-full" aria-hidden="true" />
     </div>
   );
 }

@@ -252,6 +252,7 @@ export default async function HomePage() {
             </div>
           </BlurFade>
         </section>
+        <div className="h-4 md:hidden w-full" aria-hidden="true" />
       </div>
     </main>
   );
