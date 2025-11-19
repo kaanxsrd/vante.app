@@ -60,7 +60,7 @@ export const siteConfig = {
       },
       Spotify: {
         name: 'Spotify',
-        url: 'https://open.spotify.com/user/31ofln37ijxflqlbvke75mzsm5qi?si=c31514882f6745d7',
+        url: 'https://open.spotify.com/user/31vf2doxrepuyh22st2fbzk6mkoe?si=9b57741393ba441b',
         icon: Icons.spotify,
         navbar: true,
       },
