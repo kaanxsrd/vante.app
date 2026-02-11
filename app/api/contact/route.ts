@@ -53,29 +53,81 @@ export async function POST(req: NextRequest) {
       replyTo: email,
       text: `Name: ${name}\nEmail: ${email}\nMessage:\n${message}`,
       html: `
-        <div style="font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background: #f8fafc; min-height: 100vh; padding: 48px 0;">
-          <div style="max-width: 480px; margin: 0 auto; background: #fff; border-radius: 18px; box-shadow: 0 4px 32px 0 #0002; padding: 0 0 32px 0; border: 1px solid #e5e7eb;">
-            <div style="padding: 32px 32px 0 32px;">
-              <div style="background: #f1f5f9; border-radius: 12px; padding: 24px 20px; box-shadow: 0 2px 8px 0 #0001; border: 1px solid #e0e7ef;">
-                <div style="margin-bottom: 18px;">
-                  <span style="font-weight: 600; color: #2563eb;">Name:</span>
-                  <span style="margin-left: 8px; color: #0f172a;">${name}</span>
-                </div>
-                <div style="margin-bottom: 18px;">
-                  <span style="font-weight: 600; color: #2563eb;">Email:</span>
-                  <span style="margin-left: 8px; color: #0f172a;">${email}</span>
-                </div>
-                <div>
-                  <span style="font-weight: 600; color: #2563eb;">Message:</span>
-                  <div style="margin-top: 8px; color: #0f172a; white-space: pre-line; border-left: 3px solid #2563eb; padding-left: 12px;">${message.replace(
-                    /\n/g,
-                    '<br/>',
-                  )}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+        <body style="margin: 0; padding: 0; background-color: #0a0a0a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color: #0a0a0a; padding: 40px 16px;">
+            <tr>
+              <td align="center">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="520" style="max-width: 520px; width: 100%;">
+
+                  <!-- Main Card -->
+                  <tr>
+                    <td style="background-color: #111113; border: 1px solid #1e1e24; border-radius: 16px; overflow: hidden;">
+                      <!-- Gradient accent bar -->
+                      <div style="height: 3px; background: linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa);"></div>
+
+                      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="padding: 32px 28px 28px;">
+                        <!-- Sender Info -->
+                        <tr>
+                          <td style="padding-bottom: 24px;">
+                            <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                              <tr>
+                                <td style="width: 48px; vertical-align: top;">
+                                  <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); text-align: center; line-height: 48px;">
+                                    <span style="font-size: 20px; font-weight: 600; color: #ffffff;">${name.charAt(0).toUpperCase()}</span>
+                                  </div>
+                                </td>
+                                <td style="padding-left: 14px; vertical-align: center;">
+                                  <div style="font-size: 16px; font-weight: 600; color: #f1f5f9; line-height: 1.3;">${name}</div>
+                                  <a href="mailto:${email}" style="font-size: 13px; color: #818cf8; text-decoration: none; line-height: 1.4;">${email}</a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+
+                        <!-- Divider -->
+                        <tr>
+                          <td style="padding-bottom: 24px;">
+                            <div style="height: 1px; background-color: #1e1e24;"></div>
+                          </td>
+                        </tr>
+
+                        <!-- Message -->
+                        <tr>
+                          <td>
+                            <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.2px; color: #6366f1; margin-bottom: 12px;">Message</div>
+                            <div style="font-size: 15px; line-height: 1.7; color: #cbd5e1; white-space: pre-line; background-color: #0a0a0c; border: 1px solid #1e1e24; border-radius: 10px; padding: 18px 20px;">${message.replace(/\n/g, '<br/>')}</div>
+                          </td>
+                        </tr>
+
+                        <!-- Reply Button -->
+                        <tr>
+                          <td style="padding-top: 28px;" align="center">
+                            <a href="mailto:${email}" style="display: inline-block; background: linear-gradient(135deg, #6366f1, #7c3aed); color: #ffffff; font-size: 14px; font-weight: 600; text-decoration: none; padding: 12px 32px; border-radius: 10px; letter-spacing: 0.2px;">Reply to ${name.split(' ')[0]}</a>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+
+                  <!-- Footer -->
+                  <tr>
+                    <td align="center" style="padding-top: 28px;">
+                      <p style="font-size: 12px; color: #4a4a57; margin: 0; line-height: 1.6;">
+                        Sent from the contact form on <a href="https://vante.app" style="color: #818cf8; text-decoration: none;">vante.app</a>
+                      </p>
+                    </td>
+                  </tr>
+
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
       `,
     });
     return NextResponse.json({ success: true });
