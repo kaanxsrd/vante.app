@@ -3,9 +3,10 @@ import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
 import { siteConfig } from '@/lib/site';
 import { metadataKeywords } from './metadata';
-import '@/app/globals.css';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { ThemeProvider } from '@/components/theme-provider';
 import SiteNavbar from '@/components/site-nav';
+import '@/app/globals.css';
 
 export const viewport: Viewport = {
   themeColor: 'black',
@@ -33,10 +34,16 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <TooltipProvider delayDuration={0}>
-          {children}
-          <SiteNavbar />
-        </TooltipProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+        >
+          <TooltipProvider delayDuration={0}>
+            {children}
+            <SiteNavbar />
+          </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
