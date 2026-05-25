@@ -35,7 +35,7 @@ export function BlogCard({
           <div className="flex items-center gap-4 min-w-0">
             <div className="min-w-0">
               <h2 className="title text-lg font-medium truncate">{title}</h2>
-              <p className="prose dark:prose-invert text-pretty inline text-sm text-neutral-600 dark:text-neutral-400 truncate">
+              <p className="prose dark:prose-invert text-pretty text-sm text-neutral-600 dark:text-neutral-400 line-clamp-2">
                 {description}
               </p>
               <p className="text-muted-foreground text-xs mt-1">{date}</p>
