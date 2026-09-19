@@ -58,12 +58,6 @@ export const siteConfig = {
         icon: Icons.instagram,
         navbar: true,
       },
-      Spotify: {
-        name: 'Spotify',
-        url: 'https://open.spotify.com/user/31vf2doxrepuyh22st2fbzk6mkoe?si=9b57741393ba441b',
-        icon: Icons.spotify,
-        navbar: true,
-      },
       Steam: {
         name: 'Steam',
         url: 'https://steamcommunity.com/id/vante-dev',
