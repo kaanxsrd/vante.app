@@ -1,0 +1,60 @@
+---
+title: 'Vante App'
+description: 'Discord bots built for your server: protection, registration, statistics and more. Six bots, one subscription and one dashboard to run them all.'
+type: 'Discord Bots & Dashboard'
+thumbnail: '/projects/vante-app.png'
+frontend:
+  - Next.js
+  - React
+  - Tailwind CSS
+  - TanStack Query
+  - Better Auth
+backend:
+  - Bun
+  - Discord.js
+  - tRPC
+  - PostgreSQL
+  - Drizzle ORM
+  - Redis
+links:
+  - name: 'Live Site'
+    href: 'https://dash.vante.app'
+---
+
+Vante App is a set of Discord bots for running a community server, plus the dashboard at [dash.vante.app](https://dash.vante.app) where server owners manage all of them. Each bot handles one area — **Essence** for registration and roles, **Voucher** for vouchers and rewards, **Security** for protection and punishments, **Gatekeeper** for join verification, **Mainframe** for statistics and leaderboards — and every one of them is configured from the same place.
+
+## What it does
+
+### Protection
+
+- Antinuke guard that punishes unauthorized deletions and permission changes, then reverts them from live snapshots
+- Raid protection, a whitelist with per-action flags and daily limits, and daily server checkpoints to restore from
+- Automod with strikes before action
+
+### Moderation
+
+- Thirteen punishment types, from warnings and timeouts to role-based mutes and quarantine, with numbered cases
+- Temporary punishments that expire on time, even across restarts, and are re-applied if someone rejoins
+- Appeals and ban requests reviewed from Discord or from the dashboard
+
+### Community
+
+- Registration, referral codes, tickets, giveaways, role menus and teams
+- An economy with daily rewards, a metal market, a shop, casino games and chat games
+- Activity statistics, levels and leaderboards rendered as image cards
+
+### The dashboard
+
+- Every setting for every bot in one place, with a quick setup flow for new servers
+- Live statistics, server logs with 90 days of history, deleted messages and moderation cases
+- Turkish and English, passkey sign-in, and per-member access levels for staff
+
+## How it's built
+
+The bots live in a Bun monorepo: a small framework of my own with file-based routing for commands, buttons and modals; features packaged as plugins; and Postgres through Drizzle, with Redis for caching and cross-process updates. Each deployment exposes a tRPC API, and the Next.js dashboard talks to it through one typed contract that is validated on both ends. The same dashboard also drives priw, a single-bot version for smaller communities where features are switched on and off as modules.
+
+I wrote about the design in detail in [How I Structure My Discord Bots and Their Dashboard](/blog/architecture), and about the database layer in [Why I Moved From Prisma to Drizzle](/blog/drizzle).
+
+## Role & Responsibilities
+
+I designed and built the whole system on my own: the bot framework and every bot on top of it, the database schema, the API, the dashboard, and the deployment tooling that sets up and updates a server with a single command.

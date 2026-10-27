@@ -2,38 +2,93 @@
 
 import Image from 'next/image';
 import { PinContainer } from '@/components/magicui/3d-pin';
-import { useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+
+type Step = 'compose' | 'verify' | 'sent';
+
+const MESSAGE_LIMIT = 2000;
+const RESEND_COOLDOWN = 30;
+
+const inputClass =
+  'shadow-input h-10 w-full rounded-md border border-transparent bg-white pl-4 text-sm text-neutral-700 placeholder-neutral-500 outline-none focus:ring-2 focus:ring-neutral-800 focus:outline-none active:outline-none dark:border-neutral-800 dark:bg-neutral-800 dark:text-white';
+const labelClass = 'mb-2 inline-block text-sm font-medium text-neutral-600 dark:text-neutral-300';
+const buttonClass =
+  'relative z-10 flex items-center justify-center rounded-md border border-transparent bg-neutral-800 px-4 py-2 text-sm font-medium text-white shadow-[0px_1px_0px_0px_#FFFFFF20_inset] transition duration-200 hover:bg-neutral-900 md:text-sm disabled:opacity-60';
+const linkButtonClass =
+  'text-sm text-neutral-600 underline-offset-4 hover:underline disabled:opacity-50 disabled:no-underline dark:text-neutral-400';
+
+async function post(url: string, body: unknown) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
+  return data;
+}
 
 export default function ContactPage() {
-  const formRef = useRef<HTMLFormElement>(null);
+  const [step, setStep] = useState<Step>('compose');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [website, setWebsite] = useState('');
+  const [code, setCode] = useState('');
+  const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setTimeout(() => setCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
+
+  async function requestCode() {
     setError(null);
-    setSuccess(false);
     setLoading(true);
-    const form = e.currentTarget;
-    const name = (form.elements.namedItem('name') as HTMLInputElement)?.value;
-    const email = (form.elements.namedItem('email') as HTMLInputElement)?.value;
-    const message = (form.elements.namedItem('message') as HTMLTextAreaElement)?.value;
     try {
-      const res = await fetch('/api/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, message }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send message.');
-      setSuccess(true);
-      formRef.current?.reset();
+      const data = await post('/api/contact/verify', { email, website });
+      setToken(data.token);
+      setCode('');
+      setStep('verify');
+      setCooldown(RESEND_COOLDOWN);
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to send message.');
+      setError((err as Error).message);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleCompose(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    await requestCode();
+  }
+
+  async function handleVerify(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await post('/api/contact', { name, email, message, code, token, website });
+      setStep('sent');
+    } catch (err: unknown) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function startOver() {
+    setName('');
+    setEmail('');
+    setMessage('');
+    setCode('');
+    setToken('');
+    setError(null);
+    setStep('compose');
   }
 
   return (
@@ -106,63 +161,159 @@ export default function ContactPage() {
             </div>
           </div>
           {/* Contact Form */}
-          <form ref={formRef} className="relative z-20 w-full" onSubmit={handleSubmit}>
-            <div className="mb-4 w-full">
-              <label
-                className="mb-2 inline-block text-sm font-medium text-neutral-600 dark:text-neutral-300"
-                htmlFor="name"
-              >
-                Full name
-              </label>
-              <input
-                id="name"
-                name="name"
-                placeholder="Kaan Karahanlı"
-                className="shadow-input h-10 w-full rounded-md border border-transparent bg-white pl-4 text-sm text-neutral-700 placeholder-neutral-500 outline-none focus:ring-2 focus:ring-neutral-800 focus:outline-none active:outline-none dark:border-neutral-800 dark:bg-neutral-800 dark:text-white"
-                type="text"
-              />
-            </div>
-            <div className="mb-4 w-full">
-              <label
-                className="mb-2 inline-block text-sm font-medium text-neutral-600 dark:text-neutral-300"
-                htmlFor="email"
-              >
-                Email Address
-              </label>
-              <input
-                id="email"
-                name="email"
-                placeholder="contact@vante.app"
-                className="shadow-input h-10 w-full rounded-md border border-transparent bg-white pl-4 text-sm text-neutral-700 placeholder-neutral-500 outline-none focus:ring-2 focus:ring-neutral-800 focus:outline-none active:outline-none dark:border-neutral-800 dark:bg-neutral-800 dark:text-white"
-                type="email"
-              />
-            </div>
+          {step === 'compose' && (
+            <form className="relative z-20 w-full" onSubmit={handleCompose}>
+              <div className="mb-4 w-full">
+                <label className={labelClass} htmlFor="name">
+                  Full name
+                </label>
+                <input
+                  id="name"
+                  name="name"
+                  placeholder="Kaan Karahanlı"
+                  className={inputClass}
+                  type="text"
+                  autoComplete="name"
+                  maxLength={100}
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className="mb-4 w-full">
+                <label className={labelClass} htmlFor="email">
+                  Email Address
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  placeholder="contact@vante.app"
+                  className={inputClass}
+                  type="email"
+                  autoComplete="email"
+                  maxLength={254}
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
 
-            <div className="mb-4 w-full">
-              <label
-                className="mb-2 inline-block text-sm font-medium text-neutral-600 dark:text-neutral-300"
-                htmlFor="message"
-              >
-                Message
-              </label>
-              <textarea
-                id="message"
-                name="message"
-                rows={6}
-                placeholder="Type your message here"
-                className="shadow-input w-full rounded-md border border-transparent bg-white pt-4 pl-4 text-sm text-neutral-700 placeholder-neutral-500 outline-none focus:ring-2 focus:ring-neutral-800 focus:outline-none active:outline-none dark:border-neutral-800 dark:bg-neutral-800 dark:text-white min-h-24 max-h-40 resize-y"
-              ></textarea>
+              {/* Honeypot: invisible to people, so only bots fill it in. */}
+              <div className="absolute -left-[9999px] h-0 w-0 overflow-hidden" aria-hidden="true">
+                <label htmlFor="website">Website</label>
+                <input
+                  id="website"
+                  name="website"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                />
+              </div>
+
+              <div className="mb-4 w-full">
+                <label className={labelClass} htmlFor="message">
+                  Message
+                </label>
+                <textarea
+                  id="message"
+                  name="message"
+                  rows={6}
+                  placeholder="Type your message here"
+                  maxLength={MESSAGE_LIMIT}
+                  required
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  className="shadow-input w-full rounded-md border border-transparent bg-white pt-4 pl-4 text-sm text-neutral-700 placeholder-neutral-500 outline-none focus:ring-2 focus:ring-neutral-800 focus:outline-none active:outline-none dark:border-neutral-800 dark:bg-neutral-800 dark:text-white min-h-24 max-h-40 resize-y"
+                ></textarea>
+                <p className="mt-1 text-right text-xs text-neutral-500">
+                  {message.length}/{MESSAGE_LIMIT}
+                </p>
+              </div>
+              <button className={buttonClass} type="submit" disabled={loading}>
+                {loading ? 'Sending code...' : 'Continue'}
+              </button>
+              <p className="mt-3 text-xs text-neutral-500">
+                To keep spam out, I&apos;ll email you a 6-digit code to confirm your address before
+                your message is sent.
+              </p>
+              {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
+            </form>
+          )}
+
+          {step === 'verify' && (
+            <form className="relative z-20 w-full" onSubmit={handleVerify}>
+              <h3 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+                Check your email
+              </h3>
+              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                I sent a 6-digit code to{' '}
+                <span className="font-medium text-neutral-800 dark:text-neutral-200">{email}</span>.
+                Enter it below to send your message. It expires in 10 minutes.
+              </p>
+              <div className="mt-6 mb-4 w-full">
+                <label className={labelClass} htmlFor="code">
+                  Verification code
+                </label>
+                <input
+                  id="code"
+                  name="code"
+                  placeholder="123456"
+                  className={`${inputClass} font-mono tracking-[0.4em]`}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  required
+                  autoFocus
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                />
+              </div>
+              <button className={buttonClass} type="submit" disabled={loading || code.length !== 6}>
+                {loading ? 'Sending...' : 'Verify & send'}
+              </button>
+              {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
+              <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2">
+                <button
+                  type="button"
+                  className={linkButtonClass}
+                  onClick={requestCode}
+                  disabled={loading || cooldown > 0}
+                >
+                  {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
+                </button>
+                <button
+                  type="button"
+                  className={linkButtonClass}
+                  onClick={() => {
+                    setError(null);
+                    setStep('compose');
+                  }}
+                  disabled={loading}
+                >
+                  Change email or message
+                </button>
+              </div>
+            </form>
+          )}
+
+          {step === 'sent' && (
+            <div className="relative z-20 w-full">
+              <h3 className="text-lg font-semibold text-neutral-800 dark:text-neutral-100">
+                Message sent
+              </h3>
+              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                Thanks, {name.split(' ')[0]}! Your email is confirmed and your message is on its
+                way. I&apos;ll reply to {email}.
+              </p>
+              <button type="button" className={`${buttonClass} mt-6`} onClick={startOver}>
+                Send another message
+              </button>
             </div>
-            <button
-              className="relative z-10 flex items-center justify-center rounded-md border border-transparent bg-neutral-800 px-4 py-2 text-sm font-medium text-white shadow-[0px_1px_0px_0px_#FFFFFF20_inset] transition duration-200 hover:bg-neutral-900 md:text-sm disabled:opacity-60"
-              type="submit"
-              disabled={loading}
-            >
-              {loading ? 'Sending...' : 'Submit'}
-            </button>
-            {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
-            {success && <p className="mt-2 text-sm text-green-600">Message sent successfully!</p>}
-          </form>
+          )}
         </div>
       </div>
       <div className="h-7 md:hidden w-full" aria-hidden="true" />

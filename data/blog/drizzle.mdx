@@ -1,0 +1,191 @@
+---
+title: 'Why I Moved From Prisma to Drizzle (and Let Postgres Do More Work)'
+description: 'What switching my Discord bots and dashboard to Drizzle actually changed: Bun.SQL underneath, schemas you can read, a timestamp bug that cost me a day, and race conditions solved in SQL instead of JavaScript.'
+date: '2026-10-27'
+tags: ['Drizzle', 'PostgreSQL', 'Bun', 'TypeScript', 'Database']
+featured: true
+readTime: '12 min read'
+author: 'vante'
+thumbnail: '/thumbnails/drizzle.png'
+---
+
+All three of my main projects run on Postgres, and all three talk to it through Drizzle: the Discord bots, the smaller community bot I call priw, and the dashboard at dash.vante.app. That wasn't always true. The first version of the bots used Prisma, along with Hono, a `redis` npm client and PM2.
+
+This post isn't a Drizzle tutorial. The docs cover that well. It's about what changed in my code when I switched, what broke and what I'd tell myself before starting.
+
+## Why I left Prisma
+
+Prisma wasn't bad. I just kept paying for things I didn't use:
+
+- **The engine.** Prisma ships a query engine next to your code. When I moved the bots to Bun, I wanted Bun's own Postgres driver (`Bun.SQL`), not `pg` plus `@prisma/adapter-pg` plus the engine on top.
+- **The generate step.** Every schema change meant `prisma generate` before the types caught up. It's small, but it's one more thing that drifts.
+- **A second language.** `schema.prisma` is its own DSL. I wanted the schema to be TypeScript, so I could import a column, reuse an enum's values in a zod schema, and write a doc comment on the column itself.
+
+I also didn't want to drop down to raw `Bun.SQL`, because then I'd be hand-writing migrations. Drizzle sits in the middle. The schema is TypeScript, queries look like SQL, and `drizzle-kit` writes the migrations.
+
+## The setup: Drizzle on Bun.SQL
+
+This is the entire database client for the bots:
+
+```ts
+import { SQL } from 'bun';
+import { drizzle } from 'drizzle-orm/bun-sql';
+import * as schema from './schema/index.ts';
+
+const sql = new SQL({
+  url: env.DATABASE_URL,
+  // Neon/PgBouncer drop idle sockets; recycle before they do so a query
+  // never lands on a half-open connection.
+  idleTimeout: 30,
+  max: env.DATABASE_POOL_SIZE,
+});
+
+export const db = drizzle({ client: sql, schema });
+export type Db = typeof db;
+```
+
+Bun handles the sockets and Drizzle handles the types. There's no binary to download and no adapter in between. The `idleTimeout` matters more than it looks: poolers like Neon's and PgBouncer close idle connections, and if the client holds onto one longer than they do, the next query lands on a dead socket.
+
+## The schema doubles as documentation
+
+This is the part I like most. The economy table is plain TypeScript, so the reasoning sits right next to the columns:
+
+```ts
+/**
+ * **`gold` and `silver` are milligrams, not counts.** A gram is 1.000 and a
+ * `çeyrek` 1.750, which is the whole reason for a sub-gram base: the coin
+ * weights aren't whole grams, and an integer column is what keeps the
+ * `gte` guard exact.
+ */
+export const memberBalances = pgTable(
+  'member_balances',
+  {
+    guildId: text('guild_id').notNull(),
+    userId: text('user_id').notNull(),
+    balance: bigint('balance', { mode: 'number' }).notNull().default(1000),
+    gold: bigint('gold', { mode: 'number' }).notNull().default(0),
+    silver: bigint('silver', { mode: 'number' }).notNull().default(0),
+    /** Casino chips — bought 1:1 with dolar, the only thing casino games take and pay. */
+    chips: bigint('chips', { mode: 'number' }).notNull().default(0),
+    /** `null` until the first `/daily` claim. */
+    lastDailyAt: timestamp('last_daily_at'),
+  },
+  (t) => [primaryKey({ columns: [t.guildId, t.userId] })],
+);
+```
+
+Hover over `memberBalances.gold` anywhere in the codebase and that comment shows up. With Prisma, this kind of note ended up in a separate doc or nowhere. Six months later I still know why gold is stored in milligrams, because the schema says so.
+
+Because the schema is just TypeScript, constants live next to it too. The antinuke's `SECURITY_FLAGS` is an `as const` array in the schema package, and the dashboard mirrors it, along with the punishment types, as a `z.enum` in its API contract, with a comment pointing back at the table it came from.
+
+## The timestamp bug
+
+Cursor-paginated lists started repeating some rows and skipping others.
+
+The cause sat between Bun.SQL and Drizzle. Bun.SQL already returns a `timestamp` column as a JavaScript `Date`. Drizzle's timestamp mapper expects a string and rebuilds it as `new Date(value + '+0000')`. That string concatenation turns a `Date` into its local-time `toString()`. So on any machine not running in UTC, every timestamp came back shifted by that machine's offset. On Istanbul time that's three hours, which was enough to point every pagination cursor at the wrong row.
+
+The fix patches the mapper for every timestamp column, once, at startup:
+
+```ts
+for (const table of Object.values(schema)) {
+  if (!is(table, Table)) continue;
+  for (const column of Object.values(getTableColumns(table))) {
+    if (!is(column, PgTimestamp)) continue;
+    const fromDriver = column.mapFromDriverValue;
+    column.mapFromDriverValue = (value: string | Date) =>
+      value instanceof Date ? value : fromDriver(value as string);
+  }
+}
+```
+
+A `Date` from the driver passes through untouched, and a string still goes through Drizzle's own mapping. The lesson I took from it: **when you combine a newer driver with an ORM, test on a machine that isn't in UTC.** On a UTC host the shift is zero, so the bug is invisible there.
+
+## Let Postgres enforce the rules
+
+The biggest change in how I write database code since the switch has less to do with Drizzle than with SQL. Drizzle's queries are close enough to SQL that I stopped writing "read, check in JS, then write" and started putting the check *in* the write.
+
+Discord bots are very concurrent. Two people click the same button within milliseconds, the gateway redelivers an event and a cron fires during a restart. Anything that reads, checks in JavaScript and then writes will eventually race.
+
+### Spending money: one conditional UPDATE
+
+A transfer between two members takes the money out with a `WHERE balance >= amount`. If the row doesn't match, nothing is updated and no one gets paid:
+
+```ts
+const balance = await db.transaction(async (tx) => {
+  const [from] = await tx
+    .update(memberBalances)
+    .set({ balance: sql`${memberBalances.balance} - ${amount}` })
+    .where(and(account(guildId, fromId), gte(memberBalances.balance, amount)))
+    .returning({ balance: memberBalances.balance });
+  if (!from) return null; // insufficient funds — nothing was written
+
+  await tx
+    .update(memberBalances)
+    .set({ balance: sql`${memberBalances.balance} + ${received}` })
+    .where(account(guildId, toId));
+  return from.balance;
+});
+```
+
+Two spends can't both get past zero, because Postgres checks the condition and decrements the balance in a single step. No in-memory lock is involved, so it works the same with one bot process or six.
+
+### Limited-use codes: lock the row
+
+Referral codes have a use limit. If two members redeem a code with one use left at the same moment, only one of them should succeed. Here the code row is locked for the whole decision:
+
+```ts
+const [code] = await tx
+  .select()
+  .from(referralCodes)
+  .where(and(eq(referralCodes.guildId, guildId), eq(referralCodes.code, input)))
+  .for('update');
+```
+
+The limit check, the insert into `referral_uses` and the `uses + 1` all happen inside that transaction. Registration runs in the *same* transaction, and the Discord role edit is its last step. If Discord refuses the edit, the registration and the code use both roll back.
+
+One detail that made this easy: Drizzle's `db.transaction()` called inside another transaction becomes a savepoint. So `redeemReferral(tx, …)` works on its own or as part of a bigger write, and a refusal inside it doesn't roll back the caller's work.
+
+### Counters and "first one wins"
+
+- **Ticket numbers** come from a single `INSERT … ON CONFLICT DO UPDATE … RETURNING` per server, so two tickets opened at once still get different numbers.
+- **Moderation case numbers** come from a Postgres sequence (`#1113`).
+- **Deciding things** (appeals, ban requests, giveaway endings) is a conditional update like `WHERE status = 'pending'`. When two moderators click "approve" at once, the first click wins and the second gets "already decided".
+
+None of this is Drizzle-specific, but it's much easier to reach for when your ORM doesn't hide the SQL.
+
+## One schema, three drivers
+
+The dashboard runs the same Drizzle schema on three different backends, chosen by `DATABASE_URL`:
+
+| `DATABASE_URL` | Driver | Used for |
+| --- | --- | --- |
+| `postgres://…` | Neon over HTTP | production and previews |
+| `pglite:./.data` | PGlite in a local folder | development without a Neon account |
+| `pglite:memory://` | PGlite in memory | tests |
+
+PGlite is Postgres compiled to WebAssembly, running inside the Node process. `bun dev:mock` starts the whole dashboard with an in-memory database, applies the migrations at boot, seeds demo users and points at a mock bot backend. Anyone can clone the repo and click through every page without a database or a running bot.
+
+There's one catch: **Neon's HTTP driver has no interactive transactions.** So the dashboard's data layer is written not to rely on them, while the bots, which own the critical writes, use them freely. Knowing which side of your system needs transactions is a design decision, not something to find out in production.
+
+## drizzle-kit gotchas
+
+Three things worth knowing before you hit them yourself:
+
+1. **The config runs under Node, not Bun.** `drizzle-kit` bundles `drizzle.config.ts` and evaluates it with Node, so anything touching the `Bun` global crashes. My env package reads `process.env` for exactly this reason.
+2. **It doesn't read Next.js env files.** In the dashboard, the config loads `.env.local` and then `.env` itself, in the same order `next dev` does.
+3. **Run it from the monorepo root.** In the bots repo, the `db:*` scripts run from the root with `--config packages/@repo/db/drizzle.config.ts`, so Bun's automatic `.env` loading applies and the paths resolve the same way every time.
+
+And in the dashboard, `casing: 'snake_case'` lets me write `createdAt` in TypeScript and get `created_at` in Postgres without repeating the column name everywhere.
+
+## When I'd still pick Prisma
+
+To be fair to Prisma: if your team doesn't want to think in SQL, Prisma's nested writes and relation API are friendlier, and its migration workflow holds your hand more. For a CRUD app with simple data, that's a real advantage.
+
+My projects are mostly about **concurrency and correctness**: economies, case numbers, codes with limited uses, things where two clicks at once must not both win. For that I want the SQL in plain view, and Drizzle shows it to me.
+
+## Takeaways
+
+- **Put the reasoning in the schema.** Doc comments on columns outlive any README.
+- **Push the check into the write.** A conditional `UPDATE`, a row lock or an `ON CONFLICT` beats a JavaScript `if` every time something can happen twice.
+- **Test in a timezone other than UTC.** Seriously.
+- **Know which side needs transactions.** Mine need them on the bots, not on the dashboard, and the drivers reflect that.
