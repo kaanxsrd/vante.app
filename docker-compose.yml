@@ -1,0 +1,22 @@
+name: vante-app
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vante
+      POSTGRES_PASSWORD: vante
+      POSTGRES_DB: vante
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - vante-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vante -d vante"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  vante-postgres:

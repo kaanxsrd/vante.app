@@ -1,26 +1,14 @@
 import type { NextConfig } from 'next';
-import { createMDX } from 'fumadocs-mdx/next';
-
-const withMDX = createMDX();
 
 const nextConfig: NextConfig = {
-  transpilePackages: ['geist'],
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'i.scdn.co',
-      },
-      {
-        protocol: 'https',
-        hostname: 'mosaic.scdn.co',
-      },
-      {
-        protocol: 'https',
-        hostname: 'image-cdn-fa.spotifycdn.com',
-      },
-    ],
+  poweredByHeader: false,
+  reactStrictMode: true,
+
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '9mb',
+    },
   },
 };
 
-export default withMDX(nextConfig);
+export default nextConfig;
