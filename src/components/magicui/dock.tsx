@@ -2,7 +2,7 @@
 
 import { cva, type VariantProps } from 'class-variance-authority';
 import { type MotionValue, motion, useMotionValue, useSpring, useTransform } from 'motion/react';
-import React, { type PropsWithChildren, useRef } from 'react';
+import React, { type PropsWithChildren, useEffect, useImperativeHandle, useRef } from 'react';
 import { cn } from '@/lib/utils';
 
 interface DockProps extends VariantProps<typeof dockVariants> {
@@ -15,7 +15,7 @@ interface DockProps extends VariantProps<typeof dockVariants> {
 const DEFAULT_MAGNIFICATION = 60;
 const DEFAULT_DISTANCE = 140;
 
-const dockVariants = cva('mx-auto w-max h-full p-2 flex items-end rounded-full border');
+const dockVariants = cva('mx-auto w-max max-w-full h-full p-2 flex items-end rounded-full border');
 
 const Dock = React.forwardRef<HTMLDivElement, DockProps>(
   (
@@ -29,6 +29,32 @@ const Dock = React.forwardRef<HTMLDivElement, DockProps>(
     ref,
   ) => {
     const mousex = useMotionValue(Infinity);
+    const dockRef = useRef<HTMLDivElement>(null);
+
+    useImperativeHandle(ref, () => dockRef.current as HTMLDivElement);
+
+    useEffect(() => {
+      const trackPointer = (e: PointerEvent) => {
+        if (e.pointerType !== 'mouse') return;
+        const bounds = dockRef.current?.getBoundingClientRect();
+        const inside =
+          bounds &&
+          e.clientX >= bounds.left &&
+          e.clientX <= bounds.right &&
+          e.clientY >= bounds.top &&
+          e.clientY <= bounds.bottom;
+        mousex.set(inside ? e.pageX : Infinity);
+      };
+      const clearPointer = () => mousex.set(Infinity);
+      const root = document.documentElement;
+
+      window.addEventListener('pointermove', trackPointer);
+      root.addEventListener('pointerleave', clearPointer);
+      return () => {
+        window.removeEventListener('pointermove', trackPointer);
+        root.removeEventListener('pointerleave', clearPointer);
+      };
+    }, [mousex]);
 
     const renderChildren = () => {
       return React.Children.map(children, (child) => {
@@ -44,13 +70,7 @@ const Dock = React.forwardRef<HTMLDivElement, DockProps>(
     };
 
     return (
-      <motion.div
-        ref={ref}
-        onMouseMove={(e) => mousex.set(e.pageX)}
-        onMouseLeave={() => mousex.set(Infinity)}
-        {...props}
-        className={cn(dockVariants({ className }))}
-      >
+      <motion.div ref={dockRef} {...props} className={cn(dockVariants({ className }))}>
         {renderChildren()}
       </motion.div>
     );
@@ -98,7 +118,7 @@ const DockIcon = ({
       ref={ref}
       style={{ width }}
       className={cn(
-        'flex aspect-square cursor-pointer items-center justify-center rounded-full',
+        'flex aspect-square min-w-0 cursor-pointer items-center justify-center rounded-full',
         className,
       )}
       {...props}
