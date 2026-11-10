@@ -13,5 +13,8 @@ const loadProfile = unstable_cache(() => getSetting('profile'), [PROFILE_CACHE_T
 });
 
 export const getSiteProfile = cache(
-  async (): Promise<SiteProfile> => buildSafe(DEFAULT_PROFILE, () => loadProfile()),
+  async (): Promise<SiteProfile> =>
+    buildSafe(DEFAULT_PROFILE, () =>
+      process.env.NODE_ENV === 'development' ? getSetting('profile') : loadProfile(),
+    ),
 );

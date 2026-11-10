@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { linkToHeading } from '@/lib/scroll';
 import { cn } from '@/lib/utils';
 
@@ -22,7 +22,13 @@ function findActive(headings: Heading[]): string {
   return active;
 }
 
-export function TableOfContents({ className, heading }: { className?: string; heading: string }) {
+export function TableOfContents({
+  className,
+  heading,
+}: {
+  className?: string;
+  heading: ReactNode;
+}) {
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [activeId, setActiveId] = useState('');
 

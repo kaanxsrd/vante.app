@@ -190,7 +190,7 @@ bun run dev
 
 The site runs at <http://localhost:3000> and the dashboard at `http://localhost:3000/<ADMIN_PATH>`.
 
-`db:seed` adds a placeholder profile, sample posts and projects, generated cover images, a world map and all the site text, so a new site looks finished from the first page load. Replace it from the dashboard whenever you are ready. It only runs on an empty database, so it can never overwrite real content. Without it, the pages stay blank until you fill in **Site Profile** and **Site Text**.
+`db:seed` adds a placeholder profile, sample posts and projects, generated cover images, a world map and all the site text, so a new site looks finished from the first page load. Replace it from the dashboard whenever you are ready. It only runs on an empty database, so it can never overwrite real content. Without it, each page shows placeholder skeletons until you fill in its text under **Site Text**, and the home page needs **Site Profile**.
 
 To turn on the music page, add `LASTFM_API_KEY`, enter your username in **Site Text** on the Music tab, and add `/music` to the menu in **Site Profile**.
 

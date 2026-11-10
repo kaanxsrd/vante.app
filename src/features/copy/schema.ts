@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { optionalAssetUrlSchema } from '@/lib/validation';
-import { COPY_GROUPS, type CopyField, type CopyKey, type SiteCopy } from './fields';
+import {
+  COPY_GROUPS,
+  type CopyField,
+  type CopyGroupId,
+  type CopyKey,
+  type SiteCopy,
+} from './fields';
 import { pinPositionSchema } from './pin';
 
 const MAX_LENGTH = { text: 300, long: 2000, markdown: 50_000 } as const;
@@ -23,3 +29,9 @@ export const copySchema = z.object(
 export const DEFAULT_COPY = Object.fromEntries(
   fields.map(({ key, fallback }) => [key, fallback ?? '']),
 ) as SiteCopy;
+
+export function isCopyGroupBlank(copy: SiteCopy, id: CopyGroupId): boolean {
+  const groupFields: readonly CopyField[] =
+    COPY_GROUPS.find((group) => group.id === id)?.fields ?? [];
+  return groupFields.every(({ key }) => copy[key as CopyKey] === DEFAULT_COPY[key as CopyKey]);
+}

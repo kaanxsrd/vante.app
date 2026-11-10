@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { FlickeringGrid } from '@/components/magicui/flickering-grid';
 import { AuthorCard } from '@/components/site/author-card';
 import { ContentImage } from '@/components/site/content-image';
+import { CopyText } from '@/components/site/copy-text';
 import { HashScrollHandler } from '@/components/site/hash-scroll-handler';
 import { ReadingProgress } from '@/components/site/reading-progress';
 import { TableOfContents } from '@/components/site/table-of-contents';
@@ -12,6 +13,7 @@ import { getAuthorBySlug } from '@/features/authors/queries';
 import type { PublicPost } from '@/features/blog/queries';
 import { Markdown } from '@/features/content/markdown';
 import { getCopy } from '@/features/copy/queries';
+import { isCopyGroupBlank } from '@/features/copy/schema';
 import { formatDate } from '@/lib/format';
 
 const PANEL_CLASS =
@@ -114,7 +116,14 @@ export async function PostArticle({ post, footer }: { post: PublicPost; footer?:
                   </div>
                 )}
                 <div className={`${PANEL_CLASS} p-6`}>
-                  <TableOfContents heading={copy['blog.tocHeading']} />
+                  <TableOfContents
+                    heading={
+                      <CopyText
+                        text={copy['blog.tocHeading']}
+                        pending={isCopyGroupBlank(copy, 'blog')}
+                      />
+                    }
+                  />
                 </div>
               </div>
             </aside>

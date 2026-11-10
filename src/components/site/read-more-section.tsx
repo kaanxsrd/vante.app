@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react';
 import { BlogCard } from '@/components/site/blog-card';
 import type { PublicPost } from '@/features/blog/queries';
 import { formatDate, formatRelativeTime } from '@/lib/format';
 
-export function ReadMoreSection({ posts, heading }: { posts: PublicPost[]; heading: string }) {
+export function ReadMoreSection({ posts, heading }: { posts: PublicPost[]; heading: ReactNode }) {
   if (posts.length === 0) return null;
 
   return (

@@ -1,4 +1,5 @@
 import 'server-only';
+import { setupStageFor } from '@/features/setup/queries';
 import { logger } from '@/lib/logger';
 
 export async function buildSafe<T>(fallback: T, query: () => Promise<T>): Promise<T> {
@@ -9,6 +10,7 @@ export async function buildSafe<T>(fallback: T, query: () => Promise<T>): Promis
       logger.warn('database unavailable during build, prerendering empty content', { error });
       return fallback;
     }
+    if (process.env.NODE_ENV === 'development' && setupStageFor(error)) return fallback;
     throw error;
   }
 }

@@ -14,5 +14,8 @@ const loadCopy = unstable_cache(() => getSetting('copy'), [COPY_CACHE_TAG], {
 });
 
 export const getCopy = cache(
-  async (): Promise<SiteCopy> => buildSafe(DEFAULT_COPY, () => loadCopy()),
+  async (): Promise<SiteCopy> =>
+    buildSafe(DEFAULT_COPY, () =>
+      process.env.NODE_ENV === 'development' ? getSetting('copy') : loadCopy(),
+    ),
 );

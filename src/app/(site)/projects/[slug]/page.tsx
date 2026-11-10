@@ -4,8 +4,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ContentImage } from '@/components/site/content-image';
+import { CopyText } from '@/components/site/copy-text';
 import { Markdown } from '@/features/content/markdown';
 import { getCopy } from '@/features/copy/queries';
+import { isCopyGroupBlank } from '@/features/copy/schema';
 import { getSiteProfile } from '@/features/profile/queries';
 import {
   getPublishedProject,
@@ -112,7 +114,11 @@ export default async function ProjectPage({ params }: PageProps) {
           {techStack.length > 0 && (
             <div>
               <h2 className="title font-medium text-lg mb-4">
-                {copy['projects.technologiesHeading']}
+                <CopyText
+                  text={copy['projects.technologiesHeading']}
+                  pending={isCopyGroupBlank(copy, 'projects')}
+                  className="w-32"
+                />
               </h2>
               <div className="flex flex-wrap gap-2">
                 {techStack.map((tech) => (

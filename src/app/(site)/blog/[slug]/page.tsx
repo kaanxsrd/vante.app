@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { CopyText } from '@/components/site/copy-text';
 import { PostArticle } from '@/components/site/post-article';
 import { ReadMoreSection } from '@/components/site/read-more-section';
 import { getAuthorBySlug } from '@/features/authors/queries';
 import { getPublishedPost, getPublishedPosts, getRelatedPosts } from '@/features/blog/queries';
 import { getCopy } from '@/features/copy/queries';
+import { isCopyGroupBlank } from '@/features/copy/schema';
 import { getSiteProfile } from '@/features/profile/queries';
 import { siteUrl } from '@/lib/env';
 
@@ -72,7 +74,18 @@ export default async function BlogPost({ params }: PageProps) {
   return (
     <PostArticle
       post={post}
-      footer={<ReadMoreSection posts={related} heading={copy['blog.readMore']} />}
+      footer={
+        <ReadMoreSection
+          posts={related}
+          heading={
+            <CopyText
+              text={copy['blog.readMore']}
+              pending={isCopyGroupBlank(copy, 'blog')}
+              className="w-40"
+            />
+          }
+        />
+      }
     />
   );
 }

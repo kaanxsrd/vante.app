@@ -193,5 +193,6 @@ export const COPY_GROUPS = [
   },
 ] as const satisfies readonly { id: string; label: string; fields: readonly CopyField[] }[];
 
+export type CopyGroupId = (typeof COPY_GROUPS)[number]['id'];
 export type CopyKey = (typeof COPY_GROUPS)[number]['fields'][number]['key'];
 export type SiteCopy = Record<CopyKey, string>;

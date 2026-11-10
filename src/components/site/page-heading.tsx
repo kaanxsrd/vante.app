@@ -1,7 +1,8 @@
 import { ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
+import { CopyText } from '@/components/site/copy-text';
 
-export function PageHeading({ title }: { title: string }) {
+export function PageHeading({ title, pending = false }: { title: string; pending?: boolean }) {
   return (
     <div className="relative mb-8 flex items-center gap-3">
       <Link
@@ -11,7 +12,9 @@ export function PageHeading({ title }: { title: string }) {
       >
         <ChevronLeft className="size-6 text-secondary-foreground/70 transition-colors duration-200 group-hover:text-secondary-foreground" />
       </Link>
-      <h1 className="font-display text-3xl tracking-tight">{title}</h1>
+      <h1 className="font-display text-3xl tracking-tight">
+        <CopyText text={title} pending={pending} className="w-40" />
+      </h1>
     </div>
   );
 }

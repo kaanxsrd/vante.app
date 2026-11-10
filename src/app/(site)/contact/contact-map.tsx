@@ -15,12 +15,10 @@ export function ContactMap({
   className,
 }: {
   src: string;
-  pin: PinPosition;
+  pin: PinPosition | null;
   label: string;
   className?: string;
 }) {
-  if (!src) return null;
-
   return (
     <div className={className}>
       <div className="map-stage">
@@ -34,24 +32,26 @@ export function ContactMap({
             src={src}
             className="h-auto w-full select-none dark:[filter:invert(1)_brightness(2.2)]"
           />
-          <span
-            className="map-pin"
-            style={
-              {
-                left: `${pin.x}%`,
-                top: `${pin.y}%`,
-                '--label-shift': labelShift(pin.x),
-              } as CSSProperties
-            }
-          >
-            <span className="map-pin-ring" />
-            <span className="map-pin-ring map-pin-ring-late" />
-            <span className="map-pin-dot" />
-            <span className="map-pin-stand">
-              <span className="map-pin-beam" />
-              {label && <span className="map-pin-label">{label}</span>}
+          {pin && (
+            <span
+              className="map-pin"
+              style={
+                {
+                  left: `${pin.x}%`,
+                  top: `${pin.y}%`,
+                  '--label-shift': labelShift(pin.x),
+                } as CSSProperties
+              }
+            >
+              <span className="map-pin-ring" />
+              <span className="map-pin-ring map-pin-ring-late" />
+              <span className="map-pin-dot" />
+              <span className="map-pin-stand">
+                <span className="map-pin-beam" />
+                {label && <span className="map-pin-label">{label}</span>}
+              </span>
             </span>
-          </span>
+          )}
         </div>
       </div>
     </div>

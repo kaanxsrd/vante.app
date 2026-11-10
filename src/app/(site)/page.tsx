@@ -5,14 +5,18 @@ import { AppIcon, iconVars } from '@/components/app-icon';
 import BlurFade from '@/components/magicui/blur-fade';
 import { RevealGroup } from '@/components/magicui/reveal-group';
 import { BlogCard } from '@/components/site/blog-card';
+import { CopyText } from '@/components/site/copy-text';
 import { NowListening } from '@/components/site/now-listening';
 import { ProjectCard } from '@/components/site/project-card';
+import { SetupNotice } from '@/components/site/setup-notice';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getPublishedPosts } from '@/features/blog/queries';
 import { getCopy } from '@/features/copy/queries';
+import { isCopyGroupBlank } from '@/features/copy/schema';
 import { getSiteIcons } from '@/features/icons/queries';
 import { getSiteProfile } from '@/features/profile/queries';
 import { getHomeProjects } from '@/features/projects/queries';
+import { getSetupStage } from '@/features/setup/queries';
 import { formatDate } from '@/lib/format';
 import { stagger } from '@/lib/utils';
 
@@ -20,13 +24,25 @@ export const revalidate = 300;
 
 const EMPTY_STATE_CLASS = 'prose dark:prose-invert text-sm text-neutral-600 dark:text-neutral-400';
 
-function SectionHeader({ title, href, label }: { title: string; href: string; label: string }) {
+function SectionHeader({
+  title,
+  href,
+  label,
+  pending,
+}: {
+  title: string;
+  href: string;
+  label: string;
+  pending: boolean;
+}) {
   return (
     <div className="mb-4 flex justify-between">
-      <h2 className="title text-xl font-medium">{title}</h2>
+      <h2 className="title text-xl font-medium">
+        <CopyText text={title} pending={pending} className="w-32" />
+      </h2>
       <Link className="group link inline-flex w-fit items-center gap-0.5" href={href}>
         <span className="prose text-sm underline decoration-secondary-foreground/40 decoration-1 underline-offset-4 transition-all group-hover:decoration-secondary-foreground/70 dark:prose-invert">
-          {label}
+          <CopyText text={label} pending={pending} className="w-16" />
         </span>
         <ChevronRight className="size-4 text-primary/40 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:text-primary/70" />
       </Link>
@@ -67,6 +83,10 @@ export default async function HomePage() {
     getSiteProfile(),
     getCopy(),
   ]);
+  const setupStage = profile.name ? 'ready' : await getSetupStage();
+  if (setupStage !== 'ready') return <SetupNotice stage={setupStage} />;
+
+  const pending = isCopyGroupBlank(copy, 'home');
   const icons = await getSiteIcons(profile.skills.map((skill) => skill.icon));
   const latestPosts = posts.slice(0, 2);
 
@@ -105,7 +125,9 @@ export default async function HomePage() {
 
         {(profile.intro || profile.about) && (
           <Section id="today">
-            <h2 className="title mb-4 text-xl font-medium">{copy['home.todayHeading']}</h2>
+            <h2 className="title mb-4 text-xl font-medium">
+              <CopyText text={copy['home.todayHeading']} pending={pending} />
+            </h2>
             <div className="flex flex-col space-y-4">
               {[profile.intro, profile.about].filter(Boolean).map((paragraph) => (
                 <p
@@ -121,7 +143,9 @@ export default async function HomePage() {
 
         {profile.skills.length > 0 && (
           <Section id="tech-stack">
-            <h2 className="title mb-4 text-xl font-medium">{copy['home.techHeading']}</h2>
+            <h2 className="title mb-4 text-xl font-medium">
+              <CopyText text={copy['home.techHeading']} pending={pending} />
+            </h2>
             <RevealGroup className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
               {profile.skills.map((skill, index) => {
                 const data = icons[skill.icon];
@@ -148,9 +172,12 @@ export default async function HomePage() {
             title={copy['home.blogsHeading']}
             href="/blog"
             label={copy['home.blogsLink']}
+            pending={pending}
           />
           {latestPosts.length === 0 ? (
-            <p className={EMPTY_STATE_CLASS}>{copy['home.blogsEmpty']}</p>
+            <p className={EMPTY_STATE_CLASS}>
+              <CopyText text={copy['home.blogsEmpty']} pending={pending} className="w-48" />
+            </p>
           ) : (
             <RevealGroup className="space-y-2.5">
               {latestPosts.map((post, index) => (
@@ -173,9 +200,12 @@ export default async function HomePage() {
             title={copy['home.projectsHeading']}
             href="/projects"
             label={copy['home.projectsLink']}
+            pending={pending}
           />
           {projects.length === 0 ? (
-            <p className={EMPTY_STATE_CLASS}>{copy['home.projectsEmpty']}</p>
+            <p className={EMPTY_STATE_CLASS}>
+              <CopyText text={copy['home.projectsEmpty']} pending={pending} className="w-48" />
+            </p>
           ) : (
             <RevealGroup className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {projects.map((project, index) => (
@@ -189,7 +219,7 @@ export default async function HomePage() {
 
         <footer className="pb-16 text-center text-xs text-muted-foreground md:pb-4">
           <Link href="/privacy" className="underline-offset-4 hover:underline">
-            {copy['home.privacyLink']}
+            <CopyText text={copy['home.privacyLink']} pending={pending} className="w-20" />
           </Link>
         </footer>
       </div>
