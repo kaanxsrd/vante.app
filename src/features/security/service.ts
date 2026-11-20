@@ -63,17 +63,8 @@ async function maybeAutoSuspend(rule: RuleConfig, context: EventContext): Promis
     for: `${rule.suspendMinutes}m`,
     reason: `Automatic: ${RULES[rule.ruleId].label}`,
   });
+  // groundwork records the suspension as api_key.suspend, with the reason above.
   if (!suspended) return null;
-
-  await recordAudit({
-    actor: 'system',
-    action: 'api_key.auto_suspend',
-    entityType: 'api_key',
-    entityId: suspended.id,
-    summary: `Automatically suspended API key "${suspended.name}" for ${rule.suspendMinutes} minutes`,
-    metadata: { ruleId: rule.ruleId },
-    ip: null,
-  });
   return `Key suspended automatically for ${rule.suspendMinutes} minutes`;
 }
 

@@ -2,9 +2,10 @@ import 'server-only';
 import { createGroundwork } from '@vantedev/groundwork';
 import { after } from 'next/server';
 import { db } from '@/db';
-import { gwApiKeys, gwRateLimits } from '@/db/schema';
+import { gwApiKeys, gwAuditLog, gwRateLimits } from '@/db/schema';
 import { hashApiKey } from '@/features/api-keys/crypto';
 import { API_SCOPES } from '@/features/api-keys/scopes';
+import { AUDIT_ACTIONS } from '@/features/audit/actions';
 import { requireSecret } from './env';
 import { logger } from './logger';
 
@@ -27,9 +28,11 @@ function create() {
   const pepper = requireSecret('API_KEY_PEPPER');
   return createGroundwork({
     db,
-    tables: { rateLimits: gwRateLimits, apiKeys: gwApiKeys },
+    tables: { rateLimits: gwRateLimits, apiKeys: gwApiKeys, auditLog: gwAuditLog },
     secret: pepper,
     logger,
+    // API-key changes are recorded here too, in the same transaction as the change.
+    audit: { actions: AUDIT_ACTIONS },
     apiKeys: {
       namespace: 'vnt',
       scopes: API_SCOPES,

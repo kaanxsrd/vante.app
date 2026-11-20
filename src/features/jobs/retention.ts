@@ -1,18 +1,18 @@
 import 'server-only';
-import { and, inArray, lt, ne, sql } from 'drizzle-orm';
+import { and, inArray, lt, ne } from 'drizzle-orm';
 import { db } from '@/db';
 import {
   analyticsSalts,
   apiRequests,
-  auditLogs,
   authAttempts,
   jobs,
   notifications,
   pageViews,
-  rateLimits,
   securityEvents,
 } from '@/db/schema';
+import { pruneAuditLogs } from '@/features/audit/service';
 import { getSetting } from '@/features/settings/service';
+import { gw } from '@/lib/groundwork';
 import { logger } from '@/lib/logger';
 
 const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
@@ -28,7 +28,7 @@ export async function runRetention(): Promise<void> {
     db.delete(apiRequests).where(lt(apiRequests.createdAt, daysAgo(retention.apiRequestDays))),
     db.delete(authAttempts).where(lt(authAttempts.createdAt, daysAgo(retention.apiRequestDays))),
     db.delete(pageViews).where(lt(pageViews.createdAt, daysAgo(analytics.retentionDays))),
-    db.delete(auditLogs).where(lt(auditLogs.createdAt, daysAgo(retention.auditLogDays))),
+    pruneAuditLogs(retention.auditLogDays),
     db
       .delete(notifications)
       .where(lt(notifications.createdAt, daysAgo(retention.notificationDays))),
@@ -43,7 +43,7 @@ export async function runRetention(): Promise<void> {
     db
       .delete(jobs)
       .where(and(inArray(jobs.status, ['completed', 'failed']), lt(jobs.createdAt, daysAgo(14)))),
-    db.delete(rateLimits).where(lt(rateLimits.resetAt, sql`now()`)),
+    gw().rateLimit.cleanup(),
     db.delete(analyticsSalts).where(ne(analyticsSalts.day, today)),
   ]);
   logger.info('retention pass complete');

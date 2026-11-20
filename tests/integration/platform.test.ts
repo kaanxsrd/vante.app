@@ -2,12 +2,21 @@ import './local-database';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { closeDatabase, db } from '@/db';
-import { apiKeys, auditLogs, gwApiKeys, jobs, notifications, securityEvents } from '@/db/schema';
+import {
+  apiKeys,
+  auditLogs,
+  gwApiKeys,
+  gwAuditLog,
+  jobs,
+  notifications,
+  securityEvents,
+} from '@/db/schema';
 import { hashApiKey } from '@/features/api-keys/crypto';
 import { createApiKey, getApiKey, listApiKeys, rotateApiKey } from '@/features/api-keys/service';
+import { listAuditLogs, recordAudit } from '@/features/audit/service';
 import { enqueueJob, type JobHandler, processJobs } from '@/features/jobs/queue';
 import { deliverNotification, queueSecurityNotification } from '@/features/notifications/service';
 import { defaultRuleConfig } from '@/features/security/rules';
@@ -71,7 +80,7 @@ afterAll(async () => {
       );
     }
   }
-  await db.delete(auditLogs).where(eq(auditLogs.actor, 'test'));
+  await db.delete(gwAuditLog).where(eq(gwAuditLog.actorLabel, 'test'));
   await db.delete(securityEvents).where(sql`${securityEvents.fingerprint} like ${`%${RUN}%`}`);
   fakeResend.stop(true);
   await closeDatabase();
@@ -196,6 +205,88 @@ describe('API key rotation', () => {
 
     await db.delete(gwApiKeys).where(eq(gwApiKeys.id, old.id));
     await db.delete(apiKeys).where(eq(apiKeys.id, old.id));
+  });
+});
+
+describe('audit log', () => {
+  test('entries are recorded by groundwork and listed in the console shape', async () => {
+    await recordAudit({
+      actor: 'test',
+      action: 'settings.profile',
+      entityType: 'profile',
+      entityId: 'me',
+      summary: `${RUN} updated the profile`,
+      metadata: { field: 'bio' },
+      ip: '203.0.113.9',
+    });
+    const { rows, total } = await listAuditLogs({ limit: 5 });
+    expect(total).toBeGreaterThan(0);
+    expect(rows.find((row) => row.summary === `${RUN} updated the profile`)).toMatchObject({
+      actor: 'test',
+      action: 'settings.profile',
+      entityType: 'profile',
+      entityId: 'me',
+      metadata: { field: 'bio' },
+      ip: '203.0.113.9',
+    });
+  });
+
+  test('an API-key change is recorded once, by groundwork, with the admin as actor', async () => {
+    const { record } = await createApiKey(
+      {
+        name: `${RUN} audited`,
+        description: '',
+        scopes: ['posts:read'],
+        rateLimitPerMinute: 60,
+        dailyQuota: null,
+        allowedOrigins: [],
+        allowedIps: [],
+        expectedCountries: [],
+        expiresAt: null,
+      },
+      'test',
+    );
+    const entries = await db
+      .select()
+      .from(gwAuditLog)
+      .where(and(eq(gwAuditLog.entityId, record.id), eq(gwAuditLog.action, 'api_key.create')));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      actorType: 'user',
+      actorLabel: 'test',
+      entityType: 'api_key',
+    });
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
+  });
+
+  test('history copied by migration 0007 keeps its actors', async () => {
+    const copy = readFileSync('./src/db/migrations/0007_copy_audit_logs.sql', 'utf8');
+    const rollback = new Error('rollback');
+    let copied: (typeof gwAuditLog.$inferSelect)[] = [];
+    // Inside a transaction that is rolled back: the copy must not duplicate real history.
+    await db
+      .transaction(async (tx) => {
+        await tx.insert(auditLogs).values([
+          { actor: 'system', action: 'settings.retention', summary: `${RUN} by the system` },
+          { actor: 'api-key:vnt_0123456789ab', action: 'post.create', summary: `${RUN} by a key` },
+          { actor: 'admin@example.com', action: 'post.delete', summary: `${RUN} by an admin` },
+        ]);
+        await tx.execute(sql.raw(copy));
+        copied = await tx
+          .select()
+          .from(gwAuditLog)
+          .where(like(gwAuditLog.summary, `${RUN} by %`));
+        throw rollback;
+      })
+      .catch((error) => {
+        if (error !== rollback) throw error;
+      });
+    const byActor = Object.fromEntries(copied.map((row) => [row.actorLabel, row.actorType]));
+    expect(byActor).toEqual({
+      system: 'system',
+      'api-key:vnt_0123456789ab': 'api_key',
+      'admin@example.com': 'user',
+    });
   });
 });
 

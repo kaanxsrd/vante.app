@@ -1,13 +1,14 @@
 import 'server-only';
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { auditLogs, authAttempts, jobs, posts, projects, securityEvents } from '@/db/schema';
+import { authAttempts, jobs, posts, projects, securityEvents } from '@/db/schema';
 import {
   getUniqueVisitorsToday,
   getVisitorTrend,
   getWebsiteSummary,
 } from '@/features/analytics/queries';
 import { getApiSummary, getRequestTrend } from '@/features/api-monitoring/queries';
+import { recentAuditLogs } from '@/features/audit/service';
 import type { DateRange } from '@/lib/date-range';
 import { logger } from '@/lib/logger';
 
@@ -91,7 +92,7 @@ export async function getOverview(range: DateRange) {
         and(gte(securityEvents.lastSeenAt, range.from), lte(securityEvents.lastSeenAt, range.to)),
       ),
     db.select().from(securityEvents).orderBy(desc(securityEvents.lastSeenAt)).limit(6),
-    db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(8),
+    recentAuditLogs(8),
     db
       .select({ value: sql<number>`count(*)::int` })
       .from(jobs)

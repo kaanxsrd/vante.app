@@ -3,10 +3,12 @@ import type { ApiKeyPolicyInput, ApiKeyRecord } from '@vantedev/groundwork/api-k
 import { and, gt, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { apiRequests } from '@/db/schema';
-import { recordAudit } from '@/features/audit/service';
 import { gw } from '@/lib/groundwork';
 import type { CreateApiKeyInput, UpdateApiKeyInput } from './schema';
 import type { ApiScope } from './scopes';
+
+// Every change below is recorded in the audit log by groundwork (api_key.create, api_key.rotate,
+// …), in the same transaction as the change.
 
 /**
  * A key as the console and the API show it. Keys are stored and verified by groundwork; this is
@@ -91,14 +93,6 @@ export async function createApiKey(input: CreateApiKeyInput, actor: string) {
     asUser(actor),
   );
   const view = toKeyRecord(record);
-  await recordAudit({
-    actor,
-    action: 'api_key.create',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Created API key "${view.name}" (${view.prefix})`,
-    metadata: { scopes: view.scopes },
-  });
   return { record: view, key };
 }
 
@@ -110,14 +104,6 @@ export async function updateApiKey({ id, ...input }: UpdateApiKeyInput, actor: s
   );
   if (!record) return null;
   const view = toKeyRecord(record);
-  await recordAudit({
-    actor,
-    action: 'api_key.update',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Updated API key "${view.name}"`,
-    metadata: { scopes: view.scopes },
-  });
   return view;
 }
 
@@ -125,14 +111,6 @@ export async function rotateApiKey(id: string, graceHours: number, actor: string
   const rotated = await gw().apiKeys.rotate(id, { ...asUser(actor), grace: `${graceHours}h` });
   if (!rotated) return null;
   const view = toKeyRecord(rotated.record);
-  await recordAudit({
-    actor,
-    action: 'api_key.rotate',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Rotated API key "${view.name}" with a ${graceHours}h grace period`,
-    metadata: { graceHours, prefix: view.prefix },
-  });
   return { record: view, key: rotated.key };
 }
 
@@ -140,13 +118,6 @@ export async function revokeApiKey(id: string, reason: string, actor: string) {
   const record = await gw().apiKeys.revoke(id, { ...asUser(actor), reason: reason || undefined });
   if (!record) return null;
   const view = toKeyRecord(record);
-  await recordAudit({
-    actor,
-    action: 'api_key.revoke',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Revoked API key "${view.name}"${reason ? `: ${reason}` : ''}`,
-  });
   return view;
 }
 
@@ -158,14 +129,6 @@ export async function suspendApiKey(id: string, minutes: number, reason: string,
   });
   if (!record) return null;
   const view = toKeyRecord(record);
-  await recordAudit({
-    actor,
-    action: 'api_key.suspend',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Suspended API key "${view.name}" for ${minutes} minutes`,
-    metadata: { reason },
-  });
   return view;
 }
 
@@ -173,13 +136,6 @@ export async function reinstateApiKey(id: string, actor: string) {
   const record = await gw().apiKeys.reinstate(id, asUser(actor));
   if (!record) return null;
   const view = toKeyRecord(record);
-  await recordAudit({
-    actor,
-    action: 'api_key.reinstate',
-    entityType: 'api_key',
-    entityId: view.id,
-    summary: `Lifted the suspension on API key "${view.name}"`,
-  });
   return view;
 }
 
@@ -187,13 +143,6 @@ export async function deleteRevokedApiKey(id: string, actor: string) {
   const existing = await gw().apiKeys.get(id);
   if (!existing?.revokedAt) return null;
   if (!(await gw().apiKeys.delete(id, asUser(actor)))) return null;
-  await recordAudit({
-    actor,
-    action: 'api_key.delete',
-    entityType: 'api_key',
-    entityId: existing.id,
-    summary: `Deleted revoked API key "${existing.name}"`,
-  });
   return { id: existing.id, name: existing.name };
 }
 
