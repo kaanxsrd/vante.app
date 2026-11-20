@@ -1,7 +1,5 @@
-import { eq, sql } from 'drizzle-orm';
-import { db } from '@/db';
-import { rateLimits } from '@/db/schema';
-import { logger } from './logger';
+import type { RateLimitRule } from '@vantedev/groundwork/rate-limit';
+import { gw } from './groundwork';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -11,77 +9,45 @@ export interface RateLimitResult {
 }
 
 interface RateLimitInput {
+  /** What is limited, such as `login:ip:<address>`. Stored only as an HMAC. */
   key: string;
   limit: number;
   windowMs: number;
 }
 
-const memory = new Map<string, { count: number; resetAt: number }>();
-const MEMORY_MAX_KEYS = 5000;
+/**
+ * Fixed windows counted by groundwork in Postgres, shared by every instance. If the database is
+ * unreachable, groundwork counts in this process's memory until it's back, as this app did.
+ * Callers pass the limit with each call, so there is one groundwork rule per limit and window,
+ * and the key is its subject.
+ */
+const rules = new Map<string, RateLimitRule>();
 
-export function consumeMemoryRateLimit({ key, limit, windowMs }: RateLimitInput): RateLimitResult {
-  const now = Date.now();
-  if (memory.size > MEMORY_MAX_KEYS) {
-    for (const [entryKey, entry] of memory) if (entry.resetAt <= now) memory.delete(entryKey);
+function ruleFor(limit: number, windowMs: number): RateLimitRule {
+  const name = `vante:${limit}/${windowMs}ms`;
+  let rule = rules.get(name);
+  if (!rule) {
+    rule = gw().rateLimit.rule({ name, limit, window: `${windowMs}ms` });
+    rules.set(name, rule);
   }
-  const existing = memory.get(key);
-  const bucket =
-    existing && existing.resetAt > now
-      ? { count: existing.count + 1, resetAt: existing.resetAt }
-      : { count: 1, resetAt: now + windowMs };
-  memory.set(key, bucket);
+  return rule;
+}
+
+export async function consumeRateLimit({
+  key,
+  limit,
+  windowMs,
+}: RateLimitInput): Promise<RateLimitResult> {
+  const result = await ruleFor(limit, windowMs).check(key);
   return {
-    allowed: bucket.count <= limit,
-    limit,
-    remaining: Math.max(0, limit - bucket.count),
-    resetAt: new Date(bucket.resetAt),
+    allowed: result.allowed,
+    limit: result.limit,
+    remaining: result.remaining,
+    resetAt: result.resetAt,
   };
 }
 
-export async function consumeRateLimit(input: RateLimitInput): Promise<RateLimitResult> {
-  const { key, limit, windowMs } = input;
-  const interval = sql`now() + (${windowMs} * interval '1 millisecond')`;
-
-  try {
-    const [row] = await db
-      .insert(rateLimits)
-      .values({ key, count: 1, resetAt: sql`${interval}` })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: {
-          count: sql`case when ${rateLimits.resetAt} <= now() then 1 else ${rateLimits.count} + 1 end`,
-          resetAt: sql`case when ${rateLimits.resetAt} <= now() then ${interval} else ${rateLimits.resetAt} end`,
-        },
-      })
-      .returning({ count: rateLimits.count, resetAt: rateLimits.resetAt });
-
-    if (!row) throw new Error('rate limit upsert returned no row');
-    return {
-      allowed: row.count <= limit,
-      limit,
-      remaining: Math.max(0, limit - row.count),
-      resetAt: row.resetAt,
-    };
-  } catch (error) {
-    logger.warn('rate limit falling back to memory', { error });
-    return consumeMemoryRateLimit(input);
-  }
-}
-
-export async function resetRateLimit(key: string): Promise<void> {
-  memory.delete(key);
-  try {
-    await db.delete(rateLimits).where(eq(rateLimits.key, key));
-  } catch (error) {
-    logger.warn('rate limit reset failed', { error });
-  }
-}
-
-export async function claimInterval(name: string, intervalMs: number): Promise<boolean> {
-  const result = await consumeRateLimit({
-    key: `interval:${name}`,
-    limit: 1,
-    windowMs: intervalMs,
-  });
-  return result.allowed;
+/** Forgets `key`'s usage, so its next request starts a fresh window. */
+export async function resetRateLimit({ key, limit, windowMs }: RateLimitInput): Promise<void> {
+  await ruleFor(limit, windowMs).reset(key);
 }

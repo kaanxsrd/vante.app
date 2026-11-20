@@ -10,7 +10,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { apiKeys } from './api';
+import { gwApiKeys } from './groundwork';
 
 export const securitySeverity = pgEnum('security_severity', [
   'info',
@@ -47,7 +47,7 @@ export const securityEvents = pgTable(
     status: securityEventStatus('status').notNull().default('open'),
     fingerprint: text('fingerprint').notNull(),
     occurrences: integer('occurrences').notNull().default(1),
-    apiKeyId: uuid('api_key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
+    apiKeyId: uuid('api_key_id').references(() => gwApiKeys.id, { onDelete: 'set null' }),
     keyPrefix: text('key_prefix'),
     endpoint: text('endpoint'),
     method: text('method'),

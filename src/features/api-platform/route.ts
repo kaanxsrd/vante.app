@@ -1,12 +1,11 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
+import type { VerifyFailureReason } from '@vantedev/groundwork/api-keys';
 import type { NextRequest } from 'next/server';
 import { after } from 'next/server';
 import { ZodError } from 'zod';
-import { displayPrefix, extractApiKey, parseKeyPrefix } from '@/features/api-keys/crypto';
 import type { ApiScope } from '@/features/api-keys/scopes';
-import { findKeyBySecret, type KeyRecord, touchKeyUsage } from '@/features/api-keys/service';
-import { apiKeyState } from '@/features/api-keys/state';
+import { type KeyRecord, toKeyRecord } from '@/features/api-keys/service';
 import {
   type ApiRequestRecord,
   outcomeForStatus,
@@ -15,14 +14,15 @@ import {
 import { kickBackgroundWork } from '@/features/jobs/scheduler';
 import { inspectApiRequest } from '@/features/security/detection';
 import { getIpRuleAction } from '@/features/security/service';
+import { gw } from '@/lib/groundwork';
 import { logger } from '@/lib/logger';
 import { consumeRateLimit, type RateLimitResult } from '@/lib/rate-limit';
 import { getRequestMeta, ipBucket, type RequestMeta } from '@/lib/request-meta';
 import { ApiError } from './http';
+import { withLegacyRateLimitHeaders } from './rate-limit-headers';
 
 const ANONYMOUS_LIMIT_PER_MINUTE = 120;
 const MINUTE_MS = 60_000;
-const DAY_MS = 86_400_000;
 
 export interface ApiContext<Params> {
   request: NextRequest;
@@ -100,74 +100,76 @@ async function guardNetwork(meta: RequestMeta, trace: Trace): Promise<void> {
   }
 }
 
-async function authenticate(request: NextRequest, trace: Trace): Promise<KeyRecord> {
-  const raw = extractApiKey(request.headers);
-  if (!raw) {
+/** This app's public error for each reason groundwork's verify can give. */
+const VERIFY_ERRORS: Readonly<
+  Record<VerifyFailureReason, { status: number; code: string; message: string }>
+> = {
+  missing: {
+    status: 401,
+    code: 'missing_api_key',
+    message: 'Send your key in the Authorization header as a Bearer token.',
+  },
+  malformed: { status: 401, code: 'invalid_api_key', message: 'This API key is not valid.' },
+  invalid: { status: 401, code: 'invalid_api_key', message: 'This API key is not valid.' },
+  revoked: { status: 401, code: 'revoked_api_key', message: 'This API key has been revoked.' },
+  expired: { status: 401, code: 'expired_api_key', message: 'This API key has expired.' },
+  suspended: {
+    status: 403,
+    code: 'api_key_suspended',
+    message: 'This API key is temporarily suspended.',
+  },
+  ip_denied: {
+    status: 403,
+    code: 'ip_not_allowed',
+    message: 'This key cannot be used from this address.',
+  },
+  origin_denied: {
+    status: 403,
+    code: 'origin_not_allowed',
+    message: 'This key cannot be used from this origin.',
+  },
+  forbidden_scope: { status: 403, code: 'insufficient_scope', message: '' },
+  rate_limited: { status: 429, code: 'rate_limited', message: 'Rate limit exceeded for this key.' },
+  quota_exceeded: {
+    status: 429,
+    code: 'daily_quota_exceeded',
+    message: 'Daily quota exceeded for this key.',
+  },
+};
+
+/**
+ * Checks the key, its state, its IP and origin allowlists, the endpoint's scope, and the key's
+ * per-minute limit and daily quota, all in groundwork's verify.
+ */
+async function authenticate(
+  request: NextRequest,
+  meta: RequestMeta,
+  scope: ApiScope | undefined,
+  trace: Trace,
+): Promise<{ key: KeyRecord; headers: Record<string, string> }> {
+  const result = await gw().apiKeys.verify(request, {
+    scopes: scope ? [scope] : [],
+    ip: meta.ip,
+    origin: meta.origin,
+  });
+  if (!result.ok) {
+    trace.apiKeyId = result.key?.id ?? null;
+    trace.keyPrefix = result.prefix;
+    const error = VERIFY_ERRORS[result.reason];
+    const message =
+      result.reason === 'forbidden_scope'
+        ? `This key needs the ${scope} permission.`
+        : error.message;
     throw new ApiError(
-      401,
-      'missing_api_key',
-      'Send your key in the Authorization header as a Bearer token.',
+      error.status,
+      error.code,
+      message,
+      error.status === 429 ? withLegacyRateLimitHeaders(result.headers) : undefined,
     );
   }
-
-  const presentedPrefix = parseKeyPrefix(raw);
-  if (presentedPrefix) trace.keyPrefix = displayPrefix(presentedPrefix);
-
-  const key = presentedPrefix ? await findKeyBySecret(raw) : null;
-  if (!key) throw new ApiError(401, 'invalid_api_key', 'This API key is not valid.');
-
-  trace.apiKeyId = key.id;
-  trace.keyPrefix = displayPrefix(key.prefix);
-
-  switch (apiKeyState(key)) {
-    case 'revoked':
-      throw new ApiError(401, 'revoked_api_key', 'This API key has been revoked.');
-    case 'expired':
-      throw new ApiError(401, 'expired_api_key', 'This API key has expired.');
-    case 'suspended':
-      throw new ApiError(403, 'api_key_suspended', 'This API key is temporarily suspended.');
-    case 'active':
-      return key;
-  }
-}
-
-function enforcePolicy(key: KeyRecord, meta: RequestMeta, scope: ApiScope | undefined): void {
-  if (key.allowedIps.length > 0 && (!meta.ip || !key.allowedIps.includes(meta.ip))) {
-    throw new ApiError(403, 'ip_not_allowed', 'This key cannot be used from this address.');
-  }
-  if (
-    key.allowedOrigins.length > 0 &&
-    meta.origin &&
-    !key.allowedOrigins.includes(meta.origin.toLowerCase())
-  ) {
-    throw new ApiError(403, 'origin_not_allowed', 'This key cannot be used from this origin.');
-  }
-  if (scope && !key.scopes.includes(scope)) {
-    throw new ApiError(403, 'insufficient_scope', `This key needs the ${scope} permission.`);
-  }
-}
-
-async function enforceLimits(key: KeyRecord): Promise<Record<string, string>> {
-  const minute = await consumeRateLimit({
-    key: `api:key:${key.id}:minute`,
-    limit: key.rateLimitPerMinute,
-    windowMs: MINUTE_MS,
-  });
-  if (!minute.allowed) {
-    throw tooManyRequests(minute, 'rate_limited', 'Rate limit exceeded for this key.');
-  }
-
-  if (key.dailyQuota !== null) {
-    const day = await consumeRateLimit({
-      key: `api:key:${key.id}:day`,
-      limit: key.dailyQuota,
-      windowMs: DAY_MS,
-    });
-    if (!day.allowed) {
-      throw tooManyRequests(day, 'daily_quota_exceeded', 'Daily quota exceeded for this key.');
-    }
-  }
-  return rateLimitHeaders(minute);
+  trace.apiKeyId = result.key.id;
+  trace.keyPrefix = result.key.prefix;
+  return { key: toKeyRecord(result.key), headers: withLegacyRateLimitHeaders(result.headers) };
 }
 
 function errorResponse(rawError: unknown, requestId: string): Response {
@@ -219,10 +221,13 @@ export function apiRoute<Params = Record<string, never>>(
 
     try {
       await guardNetwork(meta, trace);
-      const key = await authenticate(request, trace);
+      const { key, headers: limitHeaders } = await authenticate(
+        request,
+        meta,
+        options.scope,
+        trace,
+      );
       if (options.notFound) throw new ApiError(404, 'not_found', 'No such endpoint.');
-      enforcePolicy(key, meta, options.scope);
-      const limitHeaders = await enforceLimits(key);
 
       response = await handler({ request, params: await segment.params, key, requestId });
       for (const [name, value] of Object.entries(limitHeaders)) response.headers.set(name, value);
@@ -250,12 +255,8 @@ export function apiRoute<Params = Record<string, never>>(
     };
 
     after(async () => {
+      // groundwork's verify records the key's last use itself (at most once a minute).
       await recordApiRequest(record);
-      if (record.apiKeyId && record.outcome === 'success') {
-        await touchKeyUsage(record.apiKeyId, record.ip).catch((error) => {
-          logger.warn('failed to update key usage', { error });
-        });
-      }
       await inspectApiRequest(record, { watched: trace.watched });
       await kickBackgroundWork();
     });

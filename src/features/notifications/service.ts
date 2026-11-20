@@ -2,7 +2,6 @@ import 'server-only';
 import { and, desc, eq, type SQL, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { notifications, type SecurityEventRow } from '@/db/schema';
-import { enqueueJob, JOB_NOTIFICATION_DELIVER } from '@/features/jobs/queue';
 import { getEmailBrand } from '@/features/profile/brand';
 import { CLASSIFICATION_LABELS } from '@/features/security/labels';
 import { isRuleId, RULES } from '@/features/security/rules';
@@ -15,6 +14,7 @@ import { SEVERITIES } from '@/features/settings/schema';
 import { getSetting } from '@/features/settings/service';
 import { EmailNotConfiguredError, sendEmail } from '@/lib/email';
 import { adminBasePath, getEnv, siteUrl } from '@/lib/env';
+import { jobs } from '@/lib/jobs';
 import { logger } from '@/lib/logger';
 import { consumeRateLimit } from '@/lib/rate-limit';
 import { securityAlertEmail, testEmail } from './templates';
@@ -98,7 +98,7 @@ export async function queueSecurityNotification(event: SecurityEventRow): Promis
       textBody: email.text,
       securityEventId: event.id,
     });
-    await enqueueJob(JOB_NOTIFICATION_DELIVER, { notificationId });
+    await deliverNotificationJob.enqueue({ notificationId });
   } catch (error) {
     logger.error('failed to queue security notification', { eventId: event.id, error });
   }
@@ -184,7 +184,7 @@ export async function retryNotification(id: string): Promise<boolean> {
     .where(eq(notifications.id, id))
     .returning({ id: notifications.id });
   if (!row) return false;
-  await enqueueJob(JOB_NOTIFICATION_DELIVER, { notificationId: id });
+  await deliverNotificationJob.enqueue({ notificationId: id });
   return true;
 }
 
@@ -226,3 +226,17 @@ export async function listNotifications(filters: {
   ]);
   return { rows, total: total[0]?.value ?? 0 };
 }
+
+/**
+ * Sends one queued notification. A failure is retried with backoff (30s, doubling, jittered);
+ * after the last attempt the notification is marked failed.
+ */
+export const deliverNotificationJob = jobs.define('notification.deliver', {
+  maxAttempts: 5,
+  async run({ notificationId }: { notificationId: string }) {
+    await deliverNotification(notificationId);
+  },
+  async onExhausted({ notificationId }, failure) {
+    await markNotificationFailed(notificationId, failure.message);
+  },
+});

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { estimateReadingMinutes } from '@/features/content/reading-time';
-import { backoffSeconds } from '@/features/jobs/queue';
 import { detectImageType, sanitizeFilename } from '@/features/media/validate';
 import { shouldNotify } from '@/features/notifications/service';
 import { securityAlertEmail } from '@/features/notifications/templates';
@@ -10,7 +9,6 @@ import { emailLayout, escapeHtml } from '@/lib/email';
 import { adminBasePath, requireSecret, resetEnvCache } from '@/lib/env';
 import { formatRelativeTime } from '@/lib/format';
 import { redact } from '@/lib/logger';
-import { consumeMemoryRateLimit } from '@/lib/rate-limit';
 import { getClientIp, getCountry, ipBucket } from '@/lib/request-meta';
 import { SLUG_PATTERN, slugify } from '@/lib/slug';
 import { createTrailingThrottle } from '@/lib/throttle';
@@ -95,17 +93,6 @@ describe('logger redaction', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(() => redact(cyclic)).not.toThrow();
-  });
-});
-
-describe('memory rate limiter', () => {
-  test('allows up to the limit, then refuses', () => {
-    const key = `test-${Math.random()}`;
-    const results = Array.from(
-      { length: 4 },
-      () => consumeMemoryRateLimit({ key, limit: 3, windowMs: 60_000 }).allowed,
-    );
-    expect(results).toEqual([true, true, true, false]);
   });
 });
 
@@ -219,12 +206,6 @@ describe('escapeHtml', () => {
 
   test('layout embeds the accent', () => {
     expect(emailLayout('<tr></tr>', 'footer', '#123456')).toContain('#123456');
-  });
-});
-
-describe('backoffSeconds', () => {
-  test('doubles with each attempt', () => {
-    expect([1, 2, 3, 4].map(backoffSeconds)).toEqual([30, 60, 120, 240]);
   });
 });
 

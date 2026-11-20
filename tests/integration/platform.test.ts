@@ -1,21 +1,30 @@
 import './local-database';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { closeDatabase, db } from '@/db';
-import { apiKeys, auditLogs, jobs, notifications, rateLimits, securityEvents } from '@/db/schema';
 import {
-  createApiKey,
-  findKeyBySecret,
-  listApiKeys,
-  rotateApiKey,
-} from '@/features/api-keys/service';
-import { enqueueJob, type JobHandler, processJobs } from '@/features/jobs/queue';
+  apiKeys,
+  auditLogs,
+  gwApiKeys,
+  gwAuditLog,
+  gwJobs as jobs,
+  jobs as legacyJobs,
+  notifications,
+  securityEvents,
+} from '@/db/schema';
+import { hashApiKey } from '@/features/api-keys/crypto';
+import { createApiKey, getApiKey, listApiKeys, rotateApiKey } from '@/features/api-keys/service';
+import { listAuditLogs, recordAudit } from '@/features/audit/service';
 import { deliverNotification, queueSecurityNotification } from '@/features/notifications/service';
 import { defaultRuleConfig } from '@/features/security/rules';
 import { raiseSecurityEvent } from '@/features/security/service';
 import { resetEnvCache } from '@/lib/env';
-import { claimInterval, consumeRateLimit } from '@/lib/rate-limit';
+import { gw } from '@/lib/groundwork';
+import { jobs as queue } from '@/lib/jobs';
+import { consumeRateLimit, resetRateLimit } from '@/lib/rate-limit';
 
 const RUN = `t${Date.now()}`;
 
@@ -47,7 +56,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  await db.delete(jobs).where(eq(jobs.type, `${RUN}:job`));
+  await db.delete(jobs).where(like(jobs.type, `${RUN}:%`));
 
   const events = await db
     .select({ id: securityEvents.id })
@@ -72,9 +81,8 @@ afterAll(async () => {
       );
     }
   }
-  await db.delete(auditLogs).where(eq(auditLogs.actor, 'test'));
+  await db.delete(gwAuditLog).where(eq(gwAuditLog.actorLabel, 'test'));
   await db.delete(securityEvents).where(sql`${securityEvents.fingerprint} like ${`%${RUN}%`}`);
-  await db.delete(rateLimits).where(sql`${rateLimits.key} like ${`%${RUN}%`}`);
   fakeResend.stop(true);
   await closeDatabase();
 });
@@ -103,13 +111,13 @@ describe('consumeRateLimit', () => {
     await Bun.sleep(80);
     expect((await consumeRateLimit({ key, limit: 1, windowMs: 40 })).allowed).toBe(true);
   });
-
-  test('claimInterval fires once per interval', async () => {
-    const name = `${RUN}:tick`;
-    expect(await claimInterval(name, 60_000)).toBe(true);
-    expect(await claimInterval(name, 60_000)).toBe(false);
-  });
 });
+
+/** The id of the key `raw` verifies as, or null. */
+async function verifiedId(raw: string): Promise<string | null> {
+  const result = await gw().apiKeys.verify(raw);
+  return result.ok ? result.key.id : null;
+}
 
 describe('API key rotation', () => {
   const policy = {
@@ -129,24 +137,24 @@ describe('API key rotation', () => {
     const rotated = await rotateApiKey(record.id, 1, 'test');
     if (!rotated) throw new Error('rotation failed');
 
-    expect((await findKeyBySecret(original))?.id).toBe(record.id);
-    expect((await findKeyBySecret(rotated.key))?.id).toBe(record.id);
+    expect(await verifiedId(original)).toBe(record.id);
+    expect(await verifiedId(rotated.key)).toBe(record.id);
 
     await db
-      .update(apiKeys)
+      .update(gwApiKeys)
       .set({ previousKeyExpiresAt: new Date(Date.now() - 1000) })
-      .where(eq(apiKeys.id, record.id));
-    expect(await findKeyBySecret(original)).toBeNull();
-    expect((await findKeyBySecret(rotated.key))?.id).toBe(record.id);
+      .where(eq(gwApiKeys.id, record.id));
+    expect(await verifiedId(original)).toBeNull();
+    expect(await verifiedId(rotated.key)).toBe(record.id);
 
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('rotating without grace cuts the old secret off immediately', async () => {
     const { record, key: original } = await createApiKey(policy, 'test');
     await rotateApiKey(record.id, 0, 'test');
-    expect(await findKeyBySecret(original)).toBeNull();
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    expect(await verifiedId(original)).toBeNull();
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('dashboard reads never include the hash', async () => {
@@ -156,83 +164,225 @@ describe('API key rotation', () => {
     expect(Object.keys(listed ?? {})).not.toContain('keyHash');
     expect(Object.keys(listed ?? {})).not.toContain('previousKeyHash');
     expect(Object.keys(record)).not.toContain('keyHash');
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
+  });
+
+  test('a key copied by migration 0004 keeps working, with its limits and countries', async () => {
+    const pepper = process.env.API_KEY_PEPPER ?? '';
+    const prefix = randomBytes(6).toString('hex');
+    const raw = `vnt_${prefix}_${randomBytes(32).toString('base64url')}`;
+    const [old] = await db
+      .insert(apiKeys)
+      .values({
+        name: `${RUN} from before groundwork`,
+        prefix,
+        keyHash: hashApiKey(raw, pepper),
+        scopes: ['posts:read'],
+        rateLimitPerMinute: 5,
+        dailyQuota: 100,
+        expectedCountries: ['DK'],
+      })
+      .returning({ id: apiKeys.id });
+    if (!old) throw new Error('insert failed');
+    await db.execute(sql.raw(readFileSync('./src/db/migrations/0004_copy_api_keys.sql', 'utf8')));
+
+    expect(await verifiedId(raw)).toBe(old.id);
+    const copied = await getApiKey(old.id);
+    expect(copied).toMatchObject({
+      prefix,
+      scopes: ['posts:read'],
+      rateLimitPerMinute: 5,
+      dailyQuota: 100,
+      expectedCountries: ['DK'],
+    });
+    const denied = await gw().apiKeys.verify(raw, { scopes: ['posts:write'] });
+    expect(denied.ok ? null : denied.reason).toBe('forbidden_scope');
+
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, old.id));
+    await db.delete(apiKeys).where(eq(apiKeys.id, old.id));
+  });
+});
+
+describe('audit log', () => {
+  test('entries are recorded by groundwork and listed in the console shape', async () => {
+    await recordAudit({
+      actor: 'test',
+      action: 'settings.profile',
+      entityType: 'profile',
+      entityId: 'me',
+      summary: `${RUN} updated the profile`,
+      metadata: { field: 'bio' },
+      ip: '203.0.113.9',
+    });
+    const { rows, total } = await listAuditLogs({ limit: 5 });
+    expect(total).toBeGreaterThan(0);
+    expect(rows.find((row) => row.summary === `${RUN} updated the profile`)).toMatchObject({
+      actor: 'test',
+      action: 'settings.profile',
+      entityType: 'profile',
+      entityId: 'me',
+      metadata: { field: 'bio' },
+      ip: '203.0.113.9',
+    });
+  });
+
+  test('an API-key change is recorded once, by groundwork, with the admin as actor', async () => {
+    const { record } = await createApiKey(
+      {
+        name: `${RUN} audited`,
+        description: '',
+        scopes: ['posts:read'],
+        rateLimitPerMinute: 60,
+        dailyQuota: null,
+        allowedOrigins: [],
+        allowedIps: [],
+        expectedCountries: [],
+        expiresAt: null,
+      },
+      'test',
+    );
+    const entries = await db
+      .select()
+      .from(gwAuditLog)
+      .where(and(eq(gwAuditLog.entityId, record.id), eq(gwAuditLog.action, 'api_key.create')));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      actorType: 'user',
+      actorLabel: 'test',
+      entityType: 'api_key',
+    });
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
+  });
+
+  test('history copied by migration 0007 keeps its actors', async () => {
+    const copy = readFileSync('./src/db/migrations/0007_copy_audit_logs.sql', 'utf8');
+    const rollback = new Error('rollback');
+    let copied: (typeof gwAuditLog.$inferSelect)[] = [];
+    // Inside a transaction that is rolled back: the copy must not duplicate real history.
+    await db
+      .transaction(async (tx) => {
+        await tx.insert(auditLogs).values([
+          { actor: 'system', action: 'settings.retention', summary: `${RUN} by the system` },
+          { actor: 'api-key:vnt_0123456789ab', action: 'post.create', summary: `${RUN} by a key` },
+          { actor: 'admin@example.com', action: 'post.delete', summary: `${RUN} by an admin` },
+        ]);
+        await tx.execute(sql.raw(copy));
+        copied = await tx
+          .select()
+          .from(gwAuditLog)
+          .where(like(gwAuditLog.summary, `${RUN} by %`));
+        throw rollback;
+      })
+      .catch((error) => {
+        if (error !== rollback) throw error;
+      });
+    const byActor = Object.fromEntries(copied.map((row) => [row.actorLabel, row.actorType]));
+    expect(byActor).toEqual({
+      system: 'system',
+      'api-key:vnt_0123456789ab': 'api_key',
+      'admin@example.com': 'user',
+    });
   });
 });
 
 describe('job queue', () => {
-  const type = `${RUN}:job`;
-
-  async function statusOf(marker: string) {
-    const [row] = await db.select().from(jobs).where(sql`${jobs.payload}->>'marker' = ${marker}`);
+  // Each test defines its own job type on the app's queue, the way features define theirs.
+  async function rowOf(type: string) {
+    const [row] = await db.select().from(jobs).where(eq(jobs.type, type));
     return row;
   }
 
   test('runs a job once', async () => {
     let runs = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          runs += 1;
-        },
+    const job = queue.define(`${RUN}:once`, {
+      async run() {
+        runs += 1;
       },
-    };
-    await enqueueJob(type, { marker: 'once' });
-    await processJobs(handlers);
-    await processJobs(handlers);
+    });
+    await job.enqueue({});
+    await queue.runOnce();
+    await queue.runOnce();
     expect(runs).toBe(1);
-    expect((await statusOf('once'))?.status).toBe('completed');
+    expect((await rowOf(`${RUN}:once`))?.status).toBe('completed');
   });
 
-  test('concurrent workers never run the same job twice', async () => {
-    let runs = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async ({ marker }) => {
-          if (String(marker).startsWith('concurrent')) runs += 1;
-          await Bun.sleep(5);
-        },
+  test('concurrent runs never run the same job twice', async () => {
+    const runs = new Map<number, number>();
+    const job = queue.define(`${RUN}:concurrent`, {
+      async run({ n }: { n: number }) {
+        runs.set(n, (runs.get(n) ?? 0) + 1);
+        await Bun.sleep(5);
       },
-    };
-    await Promise.all(
-      Array.from({ length: 12 }, (_, i) => enqueueJob(type, { marker: `concurrent-${i}` })),
-    );
-    await Promise.all(Array.from({ length: 4 }, () => processJobs(handlers, { limit: 12 })));
-    expect(runs).toBe(12);
+    });
+    await Promise.all(Array.from({ length: 12 }, (_, n) => job.enqueue({ n })));
+    await Promise.all(Array.from({ length: 4 }, () => queue.runOnce({ concurrency: 2 })));
+    expect(runs.size).toBe(12);
+    expect([...runs.values()].every((count) => count === 1)).toBe(true);
   });
 
   test('a failing job is retried later with backoff', async () => {
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          throw new Error('boom');
-        },
+    const job = queue.define(`${RUN}:retry`, {
+      maxAttempts: 3,
+      async run() {
+        throw new Error('boom');
       },
-    };
-    await enqueueJob(type, { marker: 'retry' }, { maxAttempts: 3 });
-    await processJobs(handlers);
-    const job = await statusOf('retry');
-    expect(job?.status).toBe('pending');
-    expect(job?.attempts).toBe(1);
-    expect(job?.lastError).toBe('boom');
-    expect(job?.runAt.getTime()).toBeGreaterThan(Date.now() + 20_000);
+    });
+    await job.enqueue({});
+    const before = Date.now();
+    await queue.runOnce();
+    const row = await rowOf(`${RUN}:retry`);
+    expect(row?.status).toBe('pending');
+    expect(row?.attempts).toBe(1);
+    expect(row?.lastError).toContain('boom');
+    // Full jitter: somewhere up to 30s from now, never immediately.
+    expect(row?.runAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  test('jobs moved by migration 0009 keep their ids and attempts', async () => {
+    const move = readFileSync('./src/db/migrations/0009_move_pending_jobs.sql', 'utf8');
+    const rollback = new Error('rollback');
+    let moved: (typeof jobs.$inferSelect)[] = [];
+    let left = -1;
+    // Rolled back, so the move never touches real queued work in this database.
+    await db
+      .transaction(async (tx) => {
+        const [old] = await tx
+          .insert(legacyJobs)
+          .values({ type: 'notification.deliver', payload: { notificationId: RUN }, attempts: 2 })
+          .returning({ id: legacyJobs.id });
+        if (!old) throw new Error('insert failed');
+        await tx.execute(sql.raw(move));
+        moved = await tx.select().from(jobs).where(eq(jobs.id, old.id));
+        left = (await tx.select().from(legacyJobs).where(eq(legacyJobs.id, old.id))).length;
+        throw rollback;
+      })
+      .catch((error) => {
+        if (error !== rollback) throw error;
+      });
+    expect(left).toBe(0);
+    expect(moved[0]).toMatchObject({
+      type: 'notification.deliver',
+      status: 'pending',
+      attempts: 2,
+      payload: { notificationId: RUN },
+    });
   });
 
   test('a job out of attempts fails and calls onExhausted once', async () => {
     let exhausted = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          throw new Error('still broken');
-        },
-        onExhausted: async () => {
-          exhausted += 1;
-        },
+    const job = queue.define(`${RUN}:dead`, {
+      maxAttempts: 1,
+      async run() {
+        throw new Error('still broken');
       },
-    };
-    await enqueueJob(type, { marker: 'dead' }, { maxAttempts: 1 });
-    await processJobs(handlers);
-    expect((await statusOf('dead'))?.status).toBe('failed');
+      async onExhausted() {
+        exhausted += 1;
+      },
+    });
+    await job.enqueue({});
+    await queue.runOnce();
+    await queue.runOnce();
+    expect((await rowOf(`${RUN}:dead`))?.status).toBe('failed');
     expect(exhausted).toBe(1);
   });
 });
@@ -333,6 +483,21 @@ describe('security events and notifications', () => {
     expect((await notificationFor(event?.id ?? ''))?.status).toBe('skipped');
   });
 
+  test('a queued alert is delivered by the job queue', async () => {
+    const event = await raiseSecurityEvent(finding('queued'), rule);
+    const notification = await notificationFor(event?.id ?? '');
+    const [queued] = await db
+      .select()
+      .from(jobs)
+      .where(sql`${jobs.payload}->>'notificationId' = ${notification?.id ?? ''}`);
+    expect(queued).toMatchObject({ type: 'notification.deliver', status: 'pending' });
+
+    // Earlier tests may have left alerts queued too; this one must be among those sent.
+    await queue.runOnce();
+    expect(received.length).toBeGreaterThan(0);
+    expect((await notificationFor(event?.id ?? ''))?.status).toBe('sent');
+  });
+
   test('an already-sent notification is not sent again', async () => {
     const event = await raiseSecurityEvent(finding('resend'), rule);
     const notification = await notificationFor(event?.id ?? '');
@@ -342,15 +507,11 @@ describe('security events and notifications', () => {
   });
 
   test('alerts stop at the hourly cap while incidents are still recorded', async () => {
-    await db
-      .insert(rateLimits)
-      .values({ key: 'alerts:global', count: 1000, resetAt: new Date(Date.now() + 60_000) })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: { count: 1000, resetAt: new Date(Date.now() + 60_000) },
-      });
+    // Spend this hour's alert budget (60) the way the notification service counts it.
+    const budget = { key: 'alerts:global', limit: 60, windowMs: 3_600_000 };
+    while ((await consumeRateLimit(budget)).allowed) {}
     const event = await raiseSecurityEvent(finding('capped'), rule);
-    await db.delete(rateLimits).where(eq(rateLimits.key, 'alerts:global'));
+    await resetRateLimit(budget);
 
     expect(event?.created).toBe(true);
     expect(await notificationFor(event?.id ?? '')).toBeUndefined();
@@ -380,7 +541,7 @@ describe('security events and notifications', () => {
     const context = { apiKeyId: record.id };
     const spike = { ...finding('suspend'), ruleId: 'request_spike' as const };
     const suspendedUntil = async () =>
-      (await db.select().from(apiKeys).where(eq(apiKeys.id, record.id)))[0]?.suspendedUntil;
+      (await db.select().from(gwApiKeys).where(eq(gwApiKeys.id, record.id)))[0]?.suspendedUntil;
 
     await raiseSecurityEvent(spike, suspendRule, context);
     const first = await suspendedUntil();
@@ -390,14 +551,14 @@ describe('security events and notifications', () => {
     expect(await suspendedUntil()).toEqual(first);
 
     await db
-      .update(apiKeys)
+      .update(gwApiKeys)
       .set({ suspendedUntil: new Date(Date.now() - 1000) })
-      .where(eq(apiKeys.id, record.id));
+      .where(eq(gwApiKeys.id, record.id));
     await raiseSecurityEvent(spike, suspendRule, context);
     expect((await suspendedUntil())?.getTime()).toBeGreaterThan(Date.now());
 
     await db.delete(securityEvents).where(eq(securityEvents.apiKeyId, record.id));
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('queueSecurityNotification survives a bad event without throwing', async () => {

@@ -1,39 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  displayPrefix,
-  extractApiKey,
-  generateApiKey,
-  hashApiKey,
-  parseKeyPrefix,
-} from '@/features/api-keys/crypto';
+import { displayPrefix, hashApiKey } from '@/features/api-keys/crypto';
 import { apiKeyState } from '@/features/api-keys/state';
+import { withLegacyRateLimitHeaders } from '@/features/api-platform/rate-limit-headers';
 
 const PEPPER = 'p'.repeat(48);
 
-describe('generateApiKey', () => {
-  test('produces a key in the documented format', () => {
-    expect(generateApiKey(PEPPER).key).toMatch(/^vnt_[a-f0-9]{12}_[A-Za-z0-9_-]{43}$/);
-  });
-
-  test('never repeats', () => {
-    const keys = new Set(Array.from({ length: 200 }, () => generateApiKey(PEPPER).key));
-    expect(keys.size).toBe(200);
-  });
-
-  test('the prefix cannot reveal the secret', () => {
-    const { key, prefix } = generateApiKey(PEPPER);
-    expect(prefix).toBe(key.split('_')[1] ?? '');
-    expect(key.split('_')[2]).not.toContain(prefix);
-  });
-
-  test('the stored hash is not the key', () => {
-    const { key, hash } = generateApiKey(PEPPER);
-    expect(hash).not.toContain(key);
-    expect(hash).toMatch(/^[a-f0-9]{64}$/);
-  });
-});
-
-describe('hashApiKey', () => {
+describe('hashApiKey (keys from before groundwork)', () => {
   test('is deterministic for one pepper', () => {
     expect(hashApiKey('key', PEPPER)).toBe(hashApiKey('key', PEPPER));
   });
@@ -41,44 +13,56 @@ describe('hashApiKey', () => {
   test('a different pepper gives a different hash', () => {
     expect(hashApiKey('key', PEPPER)).not.toBe(hashApiKey('key', 'q'.repeat(48)));
   });
+
+  test('is the hex HMAC stored before groundwork', () => {
+    expect(hashApiKey('key', PEPPER)).toMatch(/^[a-f0-9]{64}$/);
+  });
 });
 
-describe('parseKeyPrefix', () => {
-  test('returns only the public part of a well-formed key', () => {
-    const { key, prefix } = generateApiKey(PEPPER);
-    expect(parseKeyPrefix(key)).toBe(prefix);
-  });
-
-  test.each([
-    '',
-    'not-a-key',
-    'vnt_short_abc',
-    'sk_123456789012_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    `vnt_123456789012_${'A'.repeat(44)}`,
-  ])('rejects %p', (value) => {
-    expect(parseKeyPrefix(value)).toBeNull();
-  });
-
+describe('displayPrefix', () => {
   test('displays with the namespace', () => {
     expect(displayPrefix('abc123')).toBe('vnt_abc123');
   });
 });
 
-describe('extractApiKey', () => {
-  test('reads a bearer token', () => {
-    expect(extractApiKey(new Headers({ authorization: 'Bearer abc' }))).toBe('abc');
+describe('withLegacyRateLimitHeaders', () => {
+  const now = Date.parse('2026-11-20T12:00:00Z');
+
+  test('adds the X-RateLimit headers this API always sent', () => {
+    const headers = withLegacyRateLimitHeaders(
+      {
+        'RateLimit-Policy': '"rate";q=60;w=60',
+        RateLimit: '"rate";r=59;t=42',
+      },
+      now,
+    );
+    expect(headers).toEqual({
+      'RateLimit-Policy': '"rate";q=60;w=60',
+      RateLimit: '"rate";r=59;t=42',
+      'X-RateLimit-Limit': '60',
+      'X-RateLimit-Remaining': '59',
+      'X-RateLimit-Reset': String(now / 1000 + 42),
+    });
   });
 
-  test('reads x-api-key', () => {
-    expect(extractApiKey(new Headers({ 'x-api-key': 'abc' }))).toBe('abc');
+  test('keeps Retry-After on a 429 and leaves Cache-Control to the route', () => {
+    const headers = withLegacyRateLimitHeaders(
+      {
+        'Cache-Control': 'no-store',
+        'RateLimit-Policy': '"quota";q=1000;w=86400',
+        RateLimit: '"quota";r=0;t=3600',
+        'Retry-After': '3600',
+      },
+      now,
+    );
+    expect(headers['Retry-After']).toBe('3600');
+    expect(headers['X-RateLimit-Limit']).toBe('1000');
+    expect(headers['X-RateLimit-Remaining']).toBe('0');
+    expect(headers['Cache-Control']).toBeUndefined();
   });
 
-  test('rejects other authorization schemes', () => {
-    expect(extractApiKey(new Headers({ authorization: 'Basic abc' }))).toBeNull();
-  });
-
-  test('returns null when there is no credential', () => {
-    expect(extractApiKey(new Headers())).toBeNull();
+  test('adds nothing for a key without a limit', () => {
+    expect(withLegacyRateLimitHeaders({}, now)).toEqual({});
   });
 });
 
