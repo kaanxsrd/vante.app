@@ -119,17 +119,19 @@ export function checkToken(token: string, email: string, code: string): TokenChe
 
 const tokenClaimKey = (token: string) => `contact-token:${token.split('.')[1] ?? token}`;
 
+const tokenClaim = (token: string) => ({
+  key: tokenClaimKey(token),
+  limit: 1,
+  windowMs: CODE_TTL_MS,
+});
+
 export async function claimToken(token: string): Promise<boolean> {
-  const claim = await consumeRateLimit({
-    key: tokenClaimKey(token),
-    limit: 1,
-    windowMs: CODE_TTL_MS,
-  });
+  const claim = await consumeRateLimit(tokenClaim(token));
   return claim.allowed;
 }
 
 export async function releaseToken(token: string): Promise<void> {
-  await resetRateLimit(tokenClaimKey(token));
+  await resetRateLimit(tokenClaim(token));
 }
 
 function contactFooter({ siteName, url }: EmailBrand): string {

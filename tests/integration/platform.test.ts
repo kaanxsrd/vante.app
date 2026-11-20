@@ -5,15 +5,7 @@ import { readFileSync } from 'node:fs';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { closeDatabase, db } from '@/db';
-import {
-  apiKeys,
-  auditLogs,
-  gwApiKeys,
-  jobs,
-  notifications,
-  rateLimits,
-  securityEvents,
-} from '@/db/schema';
+import { apiKeys, auditLogs, gwApiKeys, jobs, notifications, securityEvents } from '@/db/schema';
 import { hashApiKey } from '@/features/api-keys/crypto';
 import { createApiKey, getApiKey, listApiKeys, rotateApiKey } from '@/features/api-keys/service';
 import { enqueueJob, type JobHandler, processJobs } from '@/features/jobs/queue';
@@ -22,7 +14,7 @@ import { defaultRuleConfig } from '@/features/security/rules';
 import { raiseSecurityEvent } from '@/features/security/service';
 import { resetEnvCache } from '@/lib/env';
 import { gw } from '@/lib/groundwork';
-import { claimInterval, consumeRateLimit } from '@/lib/rate-limit';
+import { claimInterval, consumeRateLimit, resetRateLimit } from '@/lib/rate-limit';
 
 const RUN = `t${Date.now()}`;
 
@@ -81,7 +73,6 @@ afterAll(async () => {
   }
   await db.delete(auditLogs).where(eq(auditLogs.actor, 'test'));
   await db.delete(securityEvents).where(sql`${securityEvents.fingerprint} like ${`%${RUN}%`}`);
-  await db.delete(rateLimits).where(sql`${rateLimits.key} like ${`%${RUN}%`}`);
   fakeResend.stop(true);
   await closeDatabase();
 });
@@ -390,15 +381,11 @@ describe('security events and notifications', () => {
   });
 
   test('alerts stop at the hourly cap while incidents are still recorded', async () => {
-    await db
-      .insert(rateLimits)
-      .values({ key: 'alerts:global', count: 1000, resetAt: new Date(Date.now() + 60_000) })
-      .onConflictDoUpdate({
-        target: rateLimits.key,
-        set: { count: 1000, resetAt: new Date(Date.now() + 60_000) },
-      });
+    // Spend this hour's alert budget (60) the way the notification service counts it.
+    const budget = { key: 'alerts:global', limit: 60, windowMs: 3_600_000 };
+    while ((await consumeRateLimit(budget)).allowed) {}
     const event = await raiseSecurityEvent(finding('capped'), rule);
-    await db.delete(rateLimits).where(eq(rateLimits.key, 'alerts:global'));
+    await resetRateLimit(budget);
 
     expect(event?.created).toBe(true);
     expect(await notificationFor(event?.id ?? '')).toBeUndefined();
