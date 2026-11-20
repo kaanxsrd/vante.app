@@ -1,8 +1,9 @@
 import 'server-only';
 import { and, eq, gt, gte, isNotNull, ne, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { apiKeys, apiRequests, authAttempts } from '@/db/schema';
+import { apiRequests, authAttempts } from '@/db/schema';
 import type { ApiRequestRecord } from '@/features/api-monitoring/record';
+import { gw } from '@/lib/groundwork';
 import { logger } from '@/lib/logger';
 import { createTrailingThrottle } from '@/lib/throttle';
 import {
@@ -96,11 +97,10 @@ async function checkIpWindow(record: ApiRequestRecord, rules: RuleSet) {
 async function checkGeography(record: ApiRequestRecord, rules: RuleSet) {
   if (!record.apiKeyId || !record.country || !rules.geo_anomaly.enabled) return;
 
-  const [key] = await db
-    .select({ expectedCountries: apiKeys.expectedCountries })
-    .from(apiKeys)
-    .where(eq(apiKeys.id, record.apiKeyId));
-  if (!key) return;
+  const stored = await gw().apiKeys.get(record.apiKeyId);
+  if (!stored) return;
+  const countries = stored.metadata?.expectedCountries;
+  const key = { expectedCountries: Array.isArray(countries) ? countries.map(String) : [] };
 
   const since = secondsAgo(rules.geo_anomaly.windowSeconds);
   const known = await db

@@ -22,6 +22,27 @@
       "when": 1794217247278,
       "tag": "0002_authors",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795175432171,
+      "tag": "0003_groundwork_api_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795175438148,
+      "tag": "0004_copy_api_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795175465388,
+      "tag": "0005_repoint_api_key_references",
+      "breakpoints": true
     }
   ]
 }

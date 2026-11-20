@@ -9,6 +9,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { gwApiKeys } from './groundwork';
 
 export const apiKeys = pgTable(
   'api_keys',
@@ -58,7 +59,7 @@ export const apiRequests = pgTable(
   {
     id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
     requestId: uuid('request_id').notNull(),
-    apiKeyId: uuid('api_key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
+    apiKeyId: uuid('api_key_id').references(() => gwApiKeys.id, { onDelete: 'set null' }),
     keyPrefix: text('key_prefix'),
     method: text('method').notNull(),
     endpoint: text('endpoint').notNull(),

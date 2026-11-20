@@ -1,10 +1,11 @@
 import 'server-only';
-import { and, desc, eq, gt, ilike, inArray, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, or, type SQL, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { apiKeys, ipRules, securityEvents, securityRules } from '@/db/schema';
+import { ipRules, securityEvents, securityRules } from '@/db/schema';
 import { recordAudit } from '@/features/audit/service';
 import { queueSecurityNotification } from '@/features/notifications/service';
 import type { Severity } from '@/features/settings/schema';
+import { gw } from '@/lib/groundwork';
 import { logger } from '@/lib/logger';
 import type { Finding, RuleSet } from './evaluate';
 import { defaultRuleConfig, isRuleId, RULE_IDS, RULES, type RuleConfig } from './rules';
@@ -55,22 +56,13 @@ export async function saveSecurityRule(config: RuleConfig, actor: string): Promi
 async function maybeAutoSuspend(rule: RuleConfig, context: EventContext): Promise<string | null> {
   if (!rule.autoSuspend || !RULES[rule.ruleId].canAutoSuspend || !context.apiKeyId) return null;
 
-  const until = new Date(Date.now() + rule.suspendMinutes * 60_000);
-  const [suspended] = await db
-    .update(apiKeys)
-    .set({
-      suspendedUntil: until,
-      suspendedReason: `Automatic: ${RULES[rule.ruleId].label}`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(apiKeys.id, context.apiKeyId),
-        isNull(apiKeys.revokedAt),
-        or(isNull(apiKeys.suspendedUntil), lte(apiKeys.suspendedUntil, new Date())),
-      ),
-    )
-    .returning({ id: apiKeys.id, name: apiKeys.name });
+  const key = await gw().apiKeys.get(context.apiKeyId);
+  if (!key || key.revokedAt || key.status === 'suspended') return null;
+  const suspended = await gw().apiKeys.suspend(key.id, {
+    actor: { type: 'system' },
+    for: `${rule.suspendMinutes}m`,
+    reason: `Automatic: ${RULES[rule.ruleId].label}`,
+  });
   if (!suspended) return null;
 
   await recordAudit({

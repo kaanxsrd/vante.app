@@ -1,221 +1,231 @@
 import 'server-only';
-import { and, desc, eq, getTableColumns, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import type { ApiKeyPolicyInput, ApiKeyRecord } from '@vantedev/groundwork/api-keys';
+import { and, gt, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { apiKeys, apiRequests } from '@/db/schema';
+import { apiRequests } from '@/db/schema';
 import { recordAudit } from '@/features/audit/service';
-import { requireSecret } from '@/lib/env';
-import { generateApiKey, hashApiKey } from './crypto';
+import { gw } from '@/lib/groundwork';
 import type { CreateApiKeyInput, UpdateApiKeyInput } from './schema';
+import type { ApiScope } from './scopes';
 
-const {
-  keyHash: _keyHash,
-  previousKeyHash: _previousKeyHash,
-  ...safeColumns
-} = getTableColumns(apiKeys);
-
-const apiKeySafeColumns = safeColumns;
-
-function pepper(): string {
-  return requireSecret('API_KEY_PEPPER');
+/**
+ * A key as the console and the API show it. Keys are stored and verified by groundwork; this is
+ * its record in the shape this app already used, so pages and handlers didn't have to change.
+ */
+export interface KeyRecord {
+  id: string;
+  name: string;
+  description: string | null;
+  /** The 12 hex characters after `vnt_`; `displayPrefix` adds the namespace. */
+  prefix: string;
+  scopes: ApiScope[];
+  rateLimitPerMinute: number;
+  dailyQuota: number | null;
+  allowedOrigins: string[];
+  allowedIps: string[];
+  expectedCountries: string[];
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  revokedReason: string | null;
+  suspendedUntil: Date | null;
+  suspendedReason: string | null;
+  rotatedAt: Date | null;
+  previousKeyExpiresAt: Date | null;
+  lastUsedAt: Date | null;
+  lastUsedIp: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export async function createApiKey(input: CreateApiKeyInput, actor: string) {
-  const generated = generateApiKey(pepper());
-  const [record] = await db
-    .insert(apiKeys)
-    .values({
-      ...input,
-      prefix: generated.prefix,
-      keyHash: generated.hash,
-      createdBy: actor,
-    })
-    .returning(apiKeySafeColumns);
-  if (!record) throw new Error('insert returned no row');
+/** Every key this app creates has a per-minute limit; this is groundwork's default too. */
+const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
 
+export function toKeyRecord(key: ApiKeyRecord<ApiScope>): KeyRecord {
+  const countries = key.metadata?.expectedCountries;
+  return {
+    id: key.id,
+    name: key.name,
+    description: key.description,
+    prefix: key.prefix.replace(/^vnt_/, ''),
+    // This app never grants `resource:*` wildcards, so every granted scope is a declared one.
+    scopes: [...key.scopes] as ApiScope[],
+    rateLimitPerMinute: key.rateLimit?.limit ?? DEFAULT_RATE_LIMIT_PER_MINUTE,
+    dailyQuota: key.dailyQuota,
+    allowedOrigins: [...key.allowedOrigins],
+    allowedIps: [...key.allowedIps],
+    expectedCountries: Array.isArray(countries) ? countries.map(String) : [],
+    expiresAt: key.expiresAt,
+    revokedAt: key.revokedAt,
+    revokedReason: key.revokedReason,
+    suspendedUntil: key.suspendedUntil,
+    suspendedReason: key.suspendedReason,
+    rotatedAt: key.rotatedAt,
+    previousKeyExpiresAt: key.previousKeyExpiresAt,
+    lastUsedAt: key.lastUsedAt,
+    lastUsedIp: key.lastUsedIp,
+    createdBy: key.createdBy,
+    createdAt: key.createdAt,
+    updatedAt: key.updatedAt,
+  };
+}
+
+function toPolicy(input: Omit<CreateApiKeyInput, 'expiresAt'>): ApiKeyPolicyInput<ApiScope> {
+  return {
+    name: input.name,
+    description: input.description || null,
+    scopes: input.scopes,
+    rateLimit: { limit: input.rateLimitPerMinute, window: '1m' },
+    dailyQuota: input.dailyQuota,
+    allowedOrigins: input.allowedOrigins,
+    allowedIps: input.allowedIps,
+    metadata: { expectedCountries: input.expectedCountries },
+  };
+}
+
+const asUser = (actor: string) => ({ actor: { type: 'user', label: actor } });
+
+export async function createApiKey(input: CreateApiKeyInput, actor: string) {
+  const { key, record } = await gw().apiKeys.create(
+    { ...toPolicy(input), expiresAt: input.expiresAt },
+    asUser(actor),
+  );
+  const view = toKeyRecord(record);
   await recordAudit({
     actor,
     action: 'api_key.create',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Created API key "${record.name}" (${record.prefix})`,
-    metadata: { scopes: record.scopes },
+    entityId: view.id,
+    summary: `Created API key "${view.name}" (${view.prefix})`,
+    metadata: { scopes: view.scopes },
   });
-  return { record, key: generated.key };
+  return { record: view, key };
 }
 
 export async function updateApiKey({ id, ...input }: UpdateApiKeyInput, actor: string) {
-  const [record] = await db
-    .update(apiKeys)
-    .set({ ...input, updatedAt: new Date() })
-    .where(eq(apiKeys.id, id))
-    .returning(apiKeySafeColumns);
+  const record = await gw().apiKeys.update(
+    id,
+    { ...toPolicy(input), expiresAt: input.expiresAt },
+    asUser(actor),
+  );
   if (!record) return null;
+  const view = toKeyRecord(record);
   await recordAudit({
     actor,
     action: 'api_key.update',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Updated API key "${record.name}"`,
-    metadata: { scopes: record.scopes },
+    entityId: view.id,
+    summary: `Updated API key "${view.name}"`,
+    metadata: { scopes: view.scopes },
   });
-  return record;
+  return view;
 }
 
 export async function rotateApiKey(id: string, graceHours: number, actor: string) {
-  const generated = generateApiKey(pepper());
-  const now = new Date();
-  const [record] = await db
-    .update(apiKeys)
-    .set({
-      keyHash: generated.hash,
-      prefix: generated.prefix,
-      previousKeyHash: graceHours > 0 ? sql`${apiKeys.keyHash}` : null,
-      previousKeyExpiresAt:
-        graceHours > 0 ? new Date(now.getTime() + graceHours * 3_600_000) : null,
-      rotatedAt: now,
-      updatedAt: now,
-    })
-    .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
-    .returning(apiKeySafeColumns);
-  if (!record) return null;
-
+  const rotated = await gw().apiKeys.rotate(id, { ...asUser(actor), grace: `${graceHours}h` });
+  if (!rotated) return null;
+  const view = toKeyRecord(rotated.record);
   await recordAudit({
     actor,
     action: 'api_key.rotate',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Rotated API key "${record.name}" with a ${graceHours}h grace period`,
-    metadata: { graceHours, prefix: record.prefix },
+    entityId: view.id,
+    summary: `Rotated API key "${view.name}" with a ${graceHours}h grace period`,
+    metadata: { graceHours, prefix: view.prefix },
   });
-  return { record, key: generated.key };
+  return { record: view, key: rotated.key };
 }
 
 export async function revokeApiKey(id: string, reason: string, actor: string) {
-  const now = new Date();
-  const [record] = await db
-    .update(apiKeys)
-    .set({
-      revokedAt: now,
-      revokedReason: reason || null,
-      previousKeyHash: null,
-      previousKeyExpiresAt: null,
-      updatedAt: now,
-    })
-    .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
-    .returning(apiKeySafeColumns);
+  const record = await gw().apiKeys.revoke(id, { ...asUser(actor), reason: reason || undefined });
   if (!record) return null;
+  const view = toKeyRecord(record);
   await recordAudit({
     actor,
     action: 'api_key.revoke',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Revoked API key "${record.name}"${reason ? `: ${reason}` : ''}`,
+    entityId: view.id,
+    summary: `Revoked API key "${view.name}"${reason ? `: ${reason}` : ''}`,
   });
-  return record;
+  return view;
 }
 
 export async function suspendApiKey(id: string, minutes: number, reason: string, actor: string) {
-  const until = new Date(Date.now() + minutes * 60_000);
-  const [record] = await db
-    .update(apiKeys)
-    .set({ suspendedUntil: until, suspendedReason: reason || null, updatedAt: new Date() })
-    .where(and(eq(apiKeys.id, id), isNull(apiKeys.revokedAt)))
-    .returning(apiKeySafeColumns);
+  const record = await gw().apiKeys.suspend(id, {
+    ...asUser(actor),
+    for: `${minutes}m`,
+    reason: reason || undefined,
+  });
   if (!record) return null;
+  const view = toKeyRecord(record);
   await recordAudit({
     actor,
     action: 'api_key.suspend',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Suspended API key "${record.name}" for ${minutes} minutes`,
+    entityId: view.id,
+    summary: `Suspended API key "${view.name}" for ${minutes} minutes`,
     metadata: { reason },
   });
-  return record;
+  return view;
 }
 
 export async function reinstateApiKey(id: string, actor: string) {
-  const [record] = await db
-    .update(apiKeys)
-    .set({ suspendedUntil: null, suspendedReason: null, updatedAt: new Date() })
-    .where(eq(apiKeys.id, id))
-    .returning(apiKeySafeColumns);
+  const record = await gw().apiKeys.reinstate(id, asUser(actor));
   if (!record) return null;
+  const view = toKeyRecord(record);
   await recordAudit({
     actor,
     action: 'api_key.reinstate',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Lifted the suspension on API key "${record.name}"`,
+    entityId: view.id,
+    summary: `Lifted the suspension on API key "${view.name}"`,
   });
-  return record;
+  return view;
 }
 
 export async function deleteRevokedApiKey(id: string, actor: string) {
-  const [record] = await db
-    .delete(apiKeys)
-    .where(and(eq(apiKeys.id, id), isNotNull(apiKeys.revokedAt)))
-    .returning({ id: apiKeys.id, name: apiKeys.name });
-  if (!record) return null;
+  const existing = await gw().apiKeys.get(id);
+  if (!existing?.revokedAt) return null;
+  if (!(await gw().apiKeys.delete(id, asUser(actor)))) return null;
   await recordAudit({
     actor,
     action: 'api_key.delete',
     entityType: 'api_key',
-    entityId: record.id,
-    summary: `Deleted revoked API key "${record.name}"`,
+    entityId: existing.id,
+    summary: `Deleted revoked API key "${existing.name}"`,
   });
-  return record;
+  return { id: existing.id, name: existing.name };
 }
 
 export async function getApiKey(id: string) {
-  const [record] = await db.select(apiKeySafeColumns).from(apiKeys).where(eq(apiKeys.id, id));
-  return record ?? null;
+  const record = await gw().apiKeys.get(id);
+  return record ? toKeyRecord(record) : null;
 }
 
 export async function listApiKeys() {
-  const usage = db
-    .select({
-      apiKeyId: apiRequests.apiKeyId,
-      requests24h: sql<number>`count(*)::int`.as('requests_24h'),
-      errors24h: sql<number>`count(*) filter (where ${apiRequests.statusCode} >= 400)::int`.as(
-        'errors_24h',
-      ),
-    })
-    .from(apiRequests)
-    .where(gt(apiRequests.createdAt, sql`now() - interval '24 hours'`))
-    .groupBy(apiRequests.apiKeyId)
-    .as('usage');
-
-  return db
-    .select({
-      ...apiKeySafeColumns,
-      requests24h: sql<number>`coalesce(${usage.requests24h}, 0)::int`,
-      errors24h: sql<number>`coalesce(${usage.errors24h}, 0)::int`,
-    })
-    .from(apiKeys)
-    .leftJoin(usage, eq(usage.apiKeyId, apiKeys.id))
-    .orderBy(desc(apiKeys.createdAt));
-}
-
-export type KeyRecord = typeof apiKeys.$inferSelect;
-
-export async function findKeyBySecret(rawKey: string): Promise<KeyRecord | null> {
-  const hash = hashApiKey(rawKey, pepper());
-  const [record] = await db
-    .select()
-    .from(apiKeys)
-    .where(
-      or(
-        eq(apiKeys.keyHash, hash),
-        and(eq(apiKeys.previousKeyHash, hash), gt(apiKeys.previousKeyExpiresAt, new Date())),
-      ),
-    )
-    .limit(1);
-  return record ?? null;
-}
-
-export async function touchKeyUsage(id: string, ip: string | null): Promise<void> {
-  await db
-    .update(apiKeys)
-    .set({ lastUsedAt: new Date(), lastUsedIp: ip })
-    .where(eq(apiKeys.id, id));
+  const keys = await gw().apiKeys.list();
+  const ids = keys.map((key) => key.id);
+  const usage =
+    ids.length === 0
+      ? []
+      : await db
+          .select({
+            apiKeyId: apiRequests.apiKeyId,
+            requests24h: sql<number>`count(*)::int`,
+            errors24h: sql<number>`count(*) filter (where ${apiRequests.statusCode} >= 400)::int`,
+          })
+          .from(apiRequests)
+          .where(
+            and(
+              inArray(apiRequests.apiKeyId, ids),
+              gt(apiRequests.createdAt, sql`now() - interval '24 hours'`),
+            ),
+          )
+          .groupBy(apiRequests.apiKeyId);
+  const byKey = new Map(usage.map((row) => [row.apiKeyId, row]));
+  return keys.map((key) => ({
+    ...toKeyRecord(key),
+    requests24h: byKey.get(key.id)?.requests24h ?? 0,
+    errors24h: byKey.get(key.id)?.errors24h ?? 0,
+  }));
 }

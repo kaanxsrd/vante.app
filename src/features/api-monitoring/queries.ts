@@ -1,7 +1,7 @@
 import 'server-only';
 import { and, desc, eq, gte, ilike, lte, or, type SQL, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { apiKeys, apiRequests, securityEvents } from '@/db/schema';
+import { gwApiKeys as apiKeys, apiRequests, securityEvents } from '@/db/schema';
 import { type DateRange, zeroFill } from '@/lib/date-range';
 
 function inRange(range: DateRange) {

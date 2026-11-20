@@ -1,20 +1,27 @@
 import './local-database';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { closeDatabase, db } from '@/db';
-import { apiKeys, auditLogs, jobs, notifications, rateLimits, securityEvents } from '@/db/schema';
 import {
-  createApiKey,
-  findKeyBySecret,
-  listApiKeys,
-  rotateApiKey,
-} from '@/features/api-keys/service';
+  apiKeys,
+  auditLogs,
+  gwApiKeys,
+  jobs,
+  notifications,
+  rateLimits,
+  securityEvents,
+} from '@/db/schema';
+import { hashApiKey } from '@/features/api-keys/crypto';
+import { createApiKey, getApiKey, listApiKeys, rotateApiKey } from '@/features/api-keys/service';
 import { enqueueJob, type JobHandler, processJobs } from '@/features/jobs/queue';
 import { deliverNotification, queueSecurityNotification } from '@/features/notifications/service';
 import { defaultRuleConfig } from '@/features/security/rules';
 import { raiseSecurityEvent } from '@/features/security/service';
 import { resetEnvCache } from '@/lib/env';
+import { gw } from '@/lib/groundwork';
 import { claimInterval, consumeRateLimit } from '@/lib/rate-limit';
 
 const RUN = `t${Date.now()}`;
@@ -111,6 +118,12 @@ describe('consumeRateLimit', () => {
   });
 });
 
+/** The id of the key `raw` verifies as, or null. */
+async function verifiedId(raw: string): Promise<string | null> {
+  const result = await gw().apiKeys.verify(raw);
+  return result.ok ? result.key.id : null;
+}
+
 describe('API key rotation', () => {
   const policy = {
     name: `${RUN} rotation`,
@@ -129,24 +142,24 @@ describe('API key rotation', () => {
     const rotated = await rotateApiKey(record.id, 1, 'test');
     if (!rotated) throw new Error('rotation failed');
 
-    expect((await findKeyBySecret(original))?.id).toBe(record.id);
-    expect((await findKeyBySecret(rotated.key))?.id).toBe(record.id);
+    expect(await verifiedId(original)).toBe(record.id);
+    expect(await verifiedId(rotated.key)).toBe(record.id);
 
     await db
-      .update(apiKeys)
+      .update(gwApiKeys)
       .set({ previousKeyExpiresAt: new Date(Date.now() - 1000) })
-      .where(eq(apiKeys.id, record.id));
-    expect(await findKeyBySecret(original)).toBeNull();
-    expect((await findKeyBySecret(rotated.key))?.id).toBe(record.id);
+      .where(eq(gwApiKeys.id, record.id));
+    expect(await verifiedId(original)).toBeNull();
+    expect(await verifiedId(rotated.key)).toBe(record.id);
 
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('rotating without grace cuts the old secret off immediately', async () => {
     const { record, key: original } = await createApiKey(policy, 'test');
     await rotateApiKey(record.id, 0, 'test');
-    expect(await findKeyBySecret(original)).toBeNull();
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    expect(await verifiedId(original)).toBeNull();
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('dashboard reads never include the hash', async () => {
@@ -156,7 +169,42 @@ describe('API key rotation', () => {
     expect(Object.keys(listed ?? {})).not.toContain('keyHash');
     expect(Object.keys(listed ?? {})).not.toContain('previousKeyHash');
     expect(Object.keys(record)).not.toContain('keyHash');
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
+  });
+
+  test('a key copied by migration 0004 keeps working, with its limits and countries', async () => {
+    const pepper = process.env.API_KEY_PEPPER ?? '';
+    const prefix = randomBytes(6).toString('hex');
+    const raw = `vnt_${prefix}_${randomBytes(32).toString('base64url')}`;
+    const [old] = await db
+      .insert(apiKeys)
+      .values({
+        name: `${RUN} from before groundwork`,
+        prefix,
+        keyHash: hashApiKey(raw, pepper),
+        scopes: ['posts:read'],
+        rateLimitPerMinute: 5,
+        dailyQuota: 100,
+        expectedCountries: ['DK'],
+      })
+      .returning({ id: apiKeys.id });
+    if (!old) throw new Error('insert failed');
+    await db.execute(sql.raw(readFileSync('./src/db/migrations/0004_copy_api_keys.sql', 'utf8')));
+
+    expect(await verifiedId(raw)).toBe(old.id);
+    const copied = await getApiKey(old.id);
+    expect(copied).toMatchObject({
+      prefix,
+      scopes: ['posts:read'],
+      rateLimitPerMinute: 5,
+      dailyQuota: 100,
+      expectedCountries: ['DK'],
+    });
+    const denied = await gw().apiKeys.verify(raw, { scopes: ['posts:write'] });
+    expect(denied.ok ? null : denied.reason).toBe('forbidden_scope');
+
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, old.id));
+    await db.delete(apiKeys).where(eq(apiKeys.id, old.id));
   });
 });
 
@@ -380,7 +428,7 @@ describe('security events and notifications', () => {
     const context = { apiKeyId: record.id };
     const spike = { ...finding('suspend'), ruleId: 'request_spike' as const };
     const suspendedUntil = async () =>
-      (await db.select().from(apiKeys).where(eq(apiKeys.id, record.id)))[0]?.suspendedUntil;
+      (await db.select().from(gwApiKeys).where(eq(gwApiKeys.id, record.id)))[0]?.suspendedUntil;
 
     await raiseSecurityEvent(spike, suspendRule, context);
     const first = await suspendedUntil();
@@ -390,14 +438,14 @@ describe('security events and notifications', () => {
     expect(await suspendedUntil()).toEqual(first);
 
     await db
-      .update(apiKeys)
+      .update(gwApiKeys)
       .set({ suspendedUntil: new Date(Date.now() - 1000) })
-      .where(eq(apiKeys.id, record.id));
+      .where(eq(gwApiKeys.id, record.id));
     await raiseSecurityEvent(spike, suspendRule, context);
     expect((await suspendedUntil())?.getTime()).toBeGreaterThan(Date.now());
 
     await db.delete(securityEvents).where(eq(securityEvents.apiKeyId, record.id));
-    await db.delete(apiKeys).where(eq(apiKeys.id, record.id));
+    await db.delete(gwApiKeys).where(eq(gwApiKeys.id, record.id));
   });
 
   test('queueSecurityNotification survives a bad event without throwing', async () => {

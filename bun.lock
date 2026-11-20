@@ -22,6 +22,7 @@
         "@radix-ui/react-switch": "^1.4.1",
         "@radix-ui/react-tabs": "^1.2.1",
         "@radix-ui/react-tooltip": "^1.4.1",
+        "@vantedev/groundwork": "^0.1.0",
         "better-auth": "^1.7.18",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -512,6 +513,8 @@
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
     "@ungap/structured-clone": ["@ungap/structured-clone@1.4.0", "", {}, "sha512-1mEZtMKPM09vDmQt5y7YvmN2+DFTP7Tg0EWXdic8/C6VRnpb33e4ghisCIE3WZjsE2N8mf+QV1Zqh7ZFYLWInQ=="],
+
+    "@vantedev/groundwork": ["@vantedev/groundwork@0.1.0", "", { "peerDependencies": { "drizzle-orm": "^0.45.0" } }, "sha512-eRkX7ODV8PzcVkwENFuXhBuUBQz2FVfu4crJSksGsCdKYody/LdLAdYYDJIPyEtQBGAYqtJrj6hY/Lj8ifIq8Q=="],
 
     "aria-hidden": ["aria-hidden@1.2.6", "", { "dependencies": { "tslib": "2.8.1" } }, "sha512-ik3ZgC9dY/lYVVM++OISsaYDeg1tb0VtP5uL3ouh1koGOaUMDPpbFIei4JkFimWUFPn90sbMNMXQAIVOlnYKJA=="],
 
