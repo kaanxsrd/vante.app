@@ -1,7 +1,7 @@
 import 'server-only';
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { authAttempts, jobs, posts, projects, securityEvents } from '@/db/schema';
+import { authAttempts, gwJobs, posts, projects, securityEvents } from '@/db/schema';
 import {
   getUniqueVisitorsToday,
   getVisitorTrend,
@@ -95,8 +95,8 @@ export async function getOverview(range: DateRange) {
     recentAuditLogs(8),
     db
       .select({ value: sql<number>`count(*)::int` })
-      .from(jobs)
-      .where(inArray(jobs.status, ['pending', 'running'])),
+      .from(gwJobs)
+      .where(inArray(gwJobs.status, ['pending', 'running'])),
     databaseLatency(),
   ]);
 

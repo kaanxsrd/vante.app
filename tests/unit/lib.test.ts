@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { estimateReadingMinutes } from '@/features/content/reading-time';
-import { backoffSeconds } from '@/features/jobs/queue';
 import { detectImageType, sanitizeFilename } from '@/features/media/validate';
 import { shouldNotify } from '@/features/notifications/service';
 import { securityAlertEmail } from '@/features/notifications/templates';
@@ -207,12 +206,6 @@ describe('escapeHtml', () => {
 
   test('layout embeds the accent', () => {
     expect(emailLayout('<tr></tr>', 'footer', '#123456')).toContain('#123456');
-  });
-});
-
-describe('backoffSeconds', () => {
-  test('doubles with each attempt', () => {
-    expect([1, 2, 3, 4].map(backoffSeconds)).toEqual([30, 60, 120, 240]);
   });
 });
 

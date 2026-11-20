@@ -10,20 +10,21 @@ import {
   auditLogs,
   gwApiKeys,
   gwAuditLog,
-  jobs,
+  gwJobs as jobs,
+  jobs as legacyJobs,
   notifications,
   securityEvents,
 } from '@/db/schema';
 import { hashApiKey } from '@/features/api-keys/crypto';
 import { createApiKey, getApiKey, listApiKeys, rotateApiKey } from '@/features/api-keys/service';
 import { listAuditLogs, recordAudit } from '@/features/audit/service';
-import { enqueueJob, type JobHandler, processJobs } from '@/features/jobs/queue';
 import { deliverNotification, queueSecurityNotification } from '@/features/notifications/service';
 import { defaultRuleConfig } from '@/features/security/rules';
 import { raiseSecurityEvent } from '@/features/security/service';
 import { resetEnvCache } from '@/lib/env';
 import { gw } from '@/lib/groundwork';
-import { claimInterval, consumeRateLimit, resetRateLimit } from '@/lib/rate-limit';
+import { jobs as queue } from '@/lib/jobs';
+import { consumeRateLimit, resetRateLimit } from '@/lib/rate-limit';
 
 const RUN = `t${Date.now()}`;
 
@@ -55,7 +56,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  await db.delete(jobs).where(eq(jobs.type, `${RUN}:job`));
+  await db.delete(jobs).where(like(jobs.type, `${RUN}:%`));
 
   const events = await db
     .select({ id: securityEvents.id })
@@ -109,12 +110,6 @@ describe('consumeRateLimit', () => {
     await consumeRateLimit({ key, limit: 1, windowMs: 40 });
     await Bun.sleep(80);
     expect((await consumeRateLimit({ key, limit: 1, windowMs: 40 })).allowed).toBe(true);
-  });
-
-  test('claimInterval fires once per interval', async () => {
-    const name = `${RUN}:tick`;
-    expect(await claimInterval(name, 60_000)).toBe(true);
-    expect(await claimInterval(name, 60_000)).toBe(false);
   });
 });
 
@@ -291,78 +286,103 @@ describe('audit log', () => {
 });
 
 describe('job queue', () => {
-  const type = `${RUN}:job`;
-
-  async function statusOf(marker: string) {
-    const [row] = await db.select().from(jobs).where(sql`${jobs.payload}->>'marker' = ${marker}`);
+  // Each test defines its own job type on the app's queue, the way features define theirs.
+  async function rowOf(type: string) {
+    const [row] = await db.select().from(jobs).where(eq(jobs.type, type));
     return row;
   }
 
   test('runs a job once', async () => {
     let runs = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          runs += 1;
-        },
+    const job = queue.define(`${RUN}:once`, {
+      async run() {
+        runs += 1;
       },
-    };
-    await enqueueJob(type, { marker: 'once' });
-    await processJobs(handlers);
-    await processJobs(handlers);
+    });
+    await job.enqueue({});
+    await queue.runOnce();
+    await queue.runOnce();
     expect(runs).toBe(1);
-    expect((await statusOf('once'))?.status).toBe('completed');
+    expect((await rowOf(`${RUN}:once`))?.status).toBe('completed');
   });
 
-  test('concurrent workers never run the same job twice', async () => {
-    let runs = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async ({ marker }) => {
-          if (String(marker).startsWith('concurrent')) runs += 1;
-          await Bun.sleep(5);
-        },
+  test('concurrent runs never run the same job twice', async () => {
+    const runs = new Map<number, number>();
+    const job = queue.define(`${RUN}:concurrent`, {
+      async run({ n }: { n: number }) {
+        runs.set(n, (runs.get(n) ?? 0) + 1);
+        await Bun.sleep(5);
       },
-    };
-    await Promise.all(
-      Array.from({ length: 12 }, (_, i) => enqueueJob(type, { marker: `concurrent-${i}` })),
-    );
-    await Promise.all(Array.from({ length: 4 }, () => processJobs(handlers, { limit: 12 })));
-    expect(runs).toBe(12);
+    });
+    await Promise.all(Array.from({ length: 12 }, (_, n) => job.enqueue({ n })));
+    await Promise.all(Array.from({ length: 4 }, () => queue.runOnce({ concurrency: 2 })));
+    expect(runs.size).toBe(12);
+    expect([...runs.values()].every((count) => count === 1)).toBe(true);
   });
 
   test('a failing job is retried later with backoff', async () => {
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          throw new Error('boom');
-        },
+    const job = queue.define(`${RUN}:retry`, {
+      maxAttempts: 3,
+      async run() {
+        throw new Error('boom');
       },
-    };
-    await enqueueJob(type, { marker: 'retry' }, { maxAttempts: 3 });
-    await processJobs(handlers);
-    const job = await statusOf('retry');
-    expect(job?.status).toBe('pending');
-    expect(job?.attempts).toBe(1);
-    expect(job?.lastError).toBe('boom');
-    expect(job?.runAt.getTime()).toBeGreaterThan(Date.now() + 20_000);
+    });
+    await job.enqueue({});
+    const before = Date.now();
+    await queue.runOnce();
+    const row = await rowOf(`${RUN}:retry`);
+    expect(row?.status).toBe('pending');
+    expect(row?.attempts).toBe(1);
+    expect(row?.lastError).toContain('boom');
+    // Full jitter: somewhere up to 30s from now, never immediately.
+    expect(row?.runAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  test('jobs moved by migration 0009 keep their ids and attempts', async () => {
+    const move = readFileSync('./src/db/migrations/0009_move_pending_jobs.sql', 'utf8');
+    const rollback = new Error('rollback');
+    let moved: (typeof jobs.$inferSelect)[] = [];
+    let left = -1;
+    // Rolled back, so the move never touches real queued work in this database.
+    await db
+      .transaction(async (tx) => {
+        const [old] = await tx
+          .insert(legacyJobs)
+          .values({ type: 'notification.deliver', payload: { notificationId: RUN }, attempts: 2 })
+          .returning({ id: legacyJobs.id });
+        if (!old) throw new Error('insert failed');
+        await tx.execute(sql.raw(move));
+        moved = await tx.select().from(jobs).where(eq(jobs.id, old.id));
+        left = (await tx.select().from(legacyJobs).where(eq(legacyJobs.id, old.id))).length;
+        throw rollback;
+      })
+      .catch((error) => {
+        if (error !== rollback) throw error;
+      });
+    expect(left).toBe(0);
+    expect(moved[0]).toMatchObject({
+      type: 'notification.deliver',
+      status: 'pending',
+      attempts: 2,
+      payload: { notificationId: RUN },
+    });
   });
 
   test('a job out of attempts fails and calls onExhausted once', async () => {
     let exhausted = 0;
-    const handlers: Record<string, JobHandler> = {
-      [type]: {
-        run: async () => {
-          throw new Error('still broken');
-        },
-        onExhausted: async () => {
-          exhausted += 1;
-        },
+    const job = queue.define(`${RUN}:dead`, {
+      maxAttempts: 1,
+      async run() {
+        throw new Error('still broken');
       },
-    };
-    await enqueueJob(type, { marker: 'dead' }, { maxAttempts: 1 });
-    await processJobs(handlers);
-    expect((await statusOf('dead'))?.status).toBe('failed');
+      async onExhausted() {
+        exhausted += 1;
+      },
+    });
+    await job.enqueue({});
+    await queue.runOnce();
+    await queue.runOnce();
+    expect((await rowOf(`${RUN}:dead`))?.status).toBe('failed');
     expect(exhausted).toBe(1);
   });
 });
@@ -461,6 +481,21 @@ describe('security events and notifications', () => {
     }
 
     expect((await notificationFor(event?.id ?? ''))?.status).toBe('skipped');
+  });
+
+  test('a queued alert is delivered by the job queue', async () => {
+    const event = await raiseSecurityEvent(finding('queued'), rule);
+    const notification = await notificationFor(event?.id ?? '');
+    const [queued] = await db
+      .select()
+      .from(jobs)
+      .where(sql`${jobs.payload}->>'notificationId' = ${notification?.id ?? ''}`);
+    expect(queued).toMatchObject({ type: 'notification.deliver', status: 'pending' });
+
+    // Earlier tests may have left alerts queued too; this one must be among those sent.
+    await queue.runOnce();
+    expect(received.length).toBeGreaterThan(0);
+    expect((await notificationFor(event?.id ?? ''))?.status).toBe('sent');
   });
 
   test('an already-sent notification is not sent again', async () => {

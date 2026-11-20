@@ -5,7 +5,6 @@ import {
   analyticsSalts,
   apiRequests,
   authAttempts,
-  jobs,
   notifications,
   pageViews,
   securityEvents,
@@ -13,6 +12,7 @@ import {
 import { pruneAuditLogs } from '@/features/audit/service';
 import { getSetting } from '@/features/settings/service';
 import { gw } from '@/lib/groundwork';
+import { jobs } from '@/lib/jobs';
 import { logger } from '@/lib/logger';
 
 const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
@@ -40,9 +40,7 @@ export async function runRetention(): Promise<void> {
           inArray(securityEvents.status, ['resolved', 'false_positive']),
         ),
       ),
-    db
-      .delete(jobs)
-      .where(and(inArray(jobs.status, ['completed', 'failed']), lt(jobs.createdAt, daysAgo(14)))),
+    jobs.prune({ completedOlderThan: '14d' }),
     gw().rateLimit.cleanup(),
     db.delete(analyticsSalts).where(ne(analyticsSalts.day, today)),
   ]);

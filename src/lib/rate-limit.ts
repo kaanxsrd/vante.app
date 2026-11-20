@@ -51,13 +51,3 @@ export async function consumeRateLimit({
 export async function resetRateLimit({ key, limit, windowMs }: RateLimitInput): Promise<void> {
   await ruleFor(limit, windowMs).reset(key);
 }
-
-/** True at most once per interval across every instance. */
-export async function claimInterval(name: string, intervalMs: number): Promise<boolean> {
-  const result = await consumeRateLimit({
-    key: `interval:${name}`,
-    limit: 1,
-    windowMs: intervalMs,
-  });
-  return result.allowed;
-}
