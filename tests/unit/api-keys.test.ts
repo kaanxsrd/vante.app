@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { RateLimitResult } from '@vantedev/groundwork/rate-limit';
 import { displayPrefix, hashApiKey } from '@/features/api-keys/crypto';
 import { apiKeyState } from '@/features/api-keys/state';
 import { withLegacyRateLimitHeaders } from '@/features/api-platform/rate-limit-headers';
@@ -27,6 +28,15 @@ describe('displayPrefix', () => {
 
 describe('withLegacyRateLimitHeaders', () => {
   const now = Date.parse('2026-11-20T12:00:00Z');
+  const check = (limit: number, remaining: number, resetInSeconds: number): RateLimitResult => ({
+    allowed: remaining > 0,
+    limit,
+    remaining,
+    resetAt: new Date(now + resetInSeconds * 1000),
+    retryAfterMs: remaining > 0 ? 0 : resetInSeconds * 1000,
+    headers: {},
+    degraded: false,
+  });
 
   test('adds the X-RateLimit headers this API always sent', () => {
     const headers = withLegacyRateLimitHeaders(
@@ -34,7 +44,7 @@ describe('withLegacyRateLimitHeaders', () => {
         'RateLimit-Policy': '"rate";q=60;w=60',
         RateLimit: '"rate";r=59;t=42',
       },
-      now,
+      check(60, 59, 42),
     );
     expect(headers).toEqual({
       'RateLimit-Policy': '"rate";q=60;w=60',
@@ -53,7 +63,7 @@ describe('withLegacyRateLimitHeaders', () => {
         RateLimit: '"quota";r=0;t=3600',
         'Retry-After': '3600',
       },
-      now,
+      check(1000, 0, 3600),
     );
     expect(headers['Retry-After']).toBe('3600');
     expect(headers['X-RateLimit-Limit']).toBe('1000');
@@ -62,7 +72,7 @@ describe('withLegacyRateLimitHeaders', () => {
   });
 
   test('adds nothing for a key without a limit', () => {
-    expect(withLegacyRateLimitHeaders({}, now)).toEqual({});
+    expect(withLegacyRateLimitHeaders({}, null)).toEqual({});
   });
 });
 

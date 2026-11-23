@@ -1,9 +1,6 @@
 import 'server-only';
-import type { AuditActor } from '@vantedev/groundwork/audit';
-import { desc, sql } from 'drizzle-orm';
+import type { AuditActor, AuditEntry as StoredEntry } from '@vantedev/groundwork/audit';
 import { headers } from 'next/headers';
-import { db } from '@/db';
-import { gwAuditLog } from '@/db/schema';
 import { gw } from '@/lib/groundwork';
 import { logger } from '@/lib/logger';
 import { getClientIp } from '@/lib/request-meta';
@@ -63,43 +60,30 @@ export async function recordAudit(entry: AuditEntry): Promise<void> {
   }
 }
 
-const row = (entry: typeof gwAuditLog.$inferSelect): AuditRow => ({
+const row = (entry: StoredEntry): AuditRow => ({
   id: entry.id,
-  actor: entry.actorLabel ?? entry.actorType,
+  actor: entry.actor.label ?? entry.actor.type,
   action: entry.action,
-  entityType: entry.entityType,
-  entityId: entry.entityId,
+  entityType: entry.entity?.type ?? null,
+  entityId: entry.entity?.id ?? null,
   summary: entry.summary,
   metadata: entry.metadata,
   ip: entry.ip,
   createdAt: entry.occurredAt,
 });
 
-/**
- * One page of the log, newest first. The console pages by number, so this reads groundwork's
- * table directly with an offset; groundwork's own `query()` pages by cursor.
- */
+/** One page of the log, newest first. The console pages by number. */
 export async function listAuditLogs({ limit = 50, offset = 0 } = {}) {
-  const [rows, total] = await Promise.all([
-    db
-      .select()
-      .from(gwAuditLog)
-      .orderBy(desc(gwAuditLog.occurredAt), desc(gwAuditLog.id))
-      .limit(limit)
-      .offset(offset),
-    db.select({ value: sql<number>`count(*)::int` }).from(gwAuditLog),
+  const [page, total] = await Promise.all([
+    gw().audit.query({ limit, offset }),
+    gw().audit.count(),
   ]);
-  return { rows: rows.map(row), total: total[0]?.value ?? 0 };
+  return { rows: page.entries.map(row), total };
 }
 
 /** The latest entries, for the overview. */
 export async function recentAuditLogs(limit = 8): Promise<AuditRow[]> {
-  const rows = await db
-    .select()
-    .from(gwAuditLog)
-    .orderBy(desc(gwAuditLog.occurredAt), desc(gwAuditLog.id))
-    .limit(limit);
-  return rows.map(row);
+  return (await gw().audit.query({ limit })).entries.map(row);
 }
 
 /** Deletes entries older than `days`. */

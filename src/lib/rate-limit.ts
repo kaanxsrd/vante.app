@@ -1,4 +1,3 @@
-import type { RateLimitRule } from '@vantedev/groundwork/rate-limit';
 import { gw } from './groundwork';
 
 export interface RateLimitResult {
@@ -18,19 +17,15 @@ interface RateLimitInput {
 /**
  * Fixed windows counted by groundwork in Postgres, shared by every instance. If the database is
  * unreachable, groundwork counts in this process's memory until it's back, as this app did.
- * Callers pass the limit with each call, so there is one groundwork rule per limit and window,
- * and the key is its subject.
+ * Callers pass the limit with each call, so each call defines its rule (that does no I/O). The
+ * limit and window in the name keep different limits' counters apart; the key is the subject.
  */
-const rules = new Map<string, RateLimitRule>();
-
-function ruleFor(limit: number, windowMs: number): RateLimitRule {
-  const name = `vante:${limit}/${windowMs}ms`;
-  let rule = rules.get(name);
-  if (!rule) {
-    rule = gw().rateLimit.rule({ name, limit, window: `${windowMs}ms` });
-    rules.set(name, rule);
-  }
-  return rule;
+function ruleFor(limit: number, windowMs: number) {
+  return gw().rateLimit.rule({
+    name: `vante:${limit}/${windowMs}ms`,
+    limit,
+    window: `${windowMs}ms`,
+  });
 }
 
 export async function consumeRateLimit({
