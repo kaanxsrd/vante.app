@@ -1,20 +1,21 @@
+import type { RateLimitResult } from '@vantedev/groundwork/rate-limit';
+
 /**
- * groundwork sends the standard `RateLimit` and `RateLimit-Policy` headers
- * (`"name";q=60;w=60` and `"name";r=59;t=42`). Clients of this API also get the `X-RateLimit-*`
- * headers it always sent, worked out from them. `Cache-Control` is left to the route.
+ * groundwork sends the standard `RateLimit` and `RateLimit-Policy` headers. Clients of this API
+ * also get the `X-RateLimit-*` headers it always sent, from the check `verify()` returns: the
+ * per-key limit, or on a 429 the check that denied the request. `Cache-Control` is left to the
+ * route.
  */
 export function withLegacyRateLimitHeaders(
   headers: Readonly<Record<string, string>>,
-  now = Date.now(),
+  check: RateLimitResult | null | undefined,
 ): Record<string, string> {
   const { 'Cache-Control': _cacheControl, ...rest } = headers;
   const out: Record<string, string> = { ...rest };
-  const quota = /;q=(\d+)/.exec(headers['RateLimit-Policy'] ?? '')?.[1];
-  const state = /;r=(\d+);t=(\d+)/.exec(headers.RateLimit ?? '');
-  if (quota && state?.[1] && state[2]) {
-    out['X-RateLimit-Limit'] = quota;
-    out['X-RateLimit-Remaining'] = state[1];
-    out['X-RateLimit-Reset'] = String(Math.ceil(now / 1000) + Number(state[2]));
+  if (check) {
+    out['X-RateLimit-Limit'] = String(check.limit);
+    out['X-RateLimit-Remaining'] = String(check.remaining);
+    out['X-RateLimit-Reset'] = String(Math.ceil(check.resetAt.getTime() / 1000));
   }
   return out;
 }

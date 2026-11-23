@@ -164,12 +164,17 @@ async function authenticate(
       error.status,
       error.code,
       message,
-      error.status === 429 ? withLegacyRateLimitHeaders(result.headers) : undefined,
+      error.status === 429
+        ? withLegacyRateLimitHeaders(result.headers, result.quota ?? result.rateLimit)
+        : undefined,
     );
   }
   trace.apiKeyId = result.key.id;
   trace.keyPrefix = result.key.prefix;
-  return { key: toKeyRecord(result.key), headers: withLegacyRateLimitHeaders(result.headers) };
+  return {
+    key: toKeyRecord(result.key),
+    headers: withLegacyRateLimitHeaders(result.headers, result.rateLimit),
+  };
 }
 
 function errorResponse(rawError: unknown, requestId: string): Response {
